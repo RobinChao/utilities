@@ -10,19 +10,34 @@ show_status='no'
 seen_list=$(mktemp -p /var/tmp -t depdeb.XXXXXXXXXX)
 
 cleanup () {
-	local -i nseen=$(wc -l < $seen_list)
-	(( nseen > 0 )) && echo "# Total packages seen: $nseen"
+	stats
+	cp "$seen_list" /tmp/sl.txt
 	rm -f "$seen_list"
 }
 
 trap cleanup EXIT
 
+stats () {
+	local -i nseen=$(wc -l < $seen_list)
+
+	echo "# Total packages seen: $nseen"
+	if [ "$show_status" = 'yes' ]; then
+		local -i ninst=$(grep ':ok' "$seen_list" | wc -l)
+		local -i nnins=$(grep ':no' "$seen_list" | wc -l)
+		local -i nunkn=$(grep ':u ' "$seen_list" | wc -l)
+
+		echo "#           installed: $ninst"
+		echo "#       not installed: $nnins"
+		echo "#        other states: $nunkn"
+	fi
+}
+
 seen () {
-	grep -q "^$1\$" "$seen_list"
+	grep -q "^$1:.\*\$" "$seen_list"
 }
 
 mark_seen () {
-	echo "$1" >> "$seen_list"
+	echo "$@" >> "$seen_list"
 }
 
 wantees () {
@@ -40,7 +55,7 @@ pkg_status () {
 	[ "$show_status" = 'no' ] && return
 
 	local pkg="$1"
-	local status=$(echo `dpkg -s "$pkg" 2>/dev/null | grep '^Status:' | cut -d: -f2-`)
+	local status=$(dpkg -s "$pkg" 2>/dev/null | grep '^Status:' | sed -e '1,$s/^Status:[ \t]\+//')
 	local result="u ($status)"
 
 	if [ -z "$status" ]; then
@@ -73,8 +88,9 @@ hidden () {
 say () {
 	local -i level=$1
 	local c=$2
-	local pkg=$3
-	local st=$(pkg_status "$pkg")
+	local st=$3
+	local pkg=$4
+
 	if [ "$show_all" = 'yes' ] || ! hidden "$pkg"; then
 		indent $level
 		echo "$pkg$c $st"
@@ -83,24 +99,25 @@ say () {
 
 list_dep () {
 	local -i level=$1 ; shift
-	local pkg=''
+	local pkg='' st=''
 
 	if [ -z "$1" ]; then
 		return
 	fi
 
 	for pkg in "$@"; do
+		st=$(pkg_status "$pkg")
 		if seen "$pkg"; then
-			say $level '<' "$pkg"
+			say $level '<' "$st" "$pkg"
 			continue
 		fi
-		mark_seen "$pkg"
+		mark_seen "$pkg:$st"
 		if hidden "$pkg"; then
-			say $level '.' "$pkg"
+			say $level '.' "$st" "$pkg"
 		elif (( level > max_depth )); then
-			say $level '/' "$pkg"
+			say $level '/' "$st" "$pkg"
 		else
-			say $level ':' "$pkg"
+			say $level ':' "$st" "$pkg"
 			list_dep $((level + 1)) $(wantees "$pkg")
 		fi
 	done
