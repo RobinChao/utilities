@@ -2,7 +2,7 @@
 
 # script to recoursively list package dependencies to any given depth
 
-declare -i max_depth=2
+declare -i max_depth=0
 indent_step='   '
 show_all='no'
 expand_args='no'
