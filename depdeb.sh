@@ -130,13 +130,14 @@ while [ -n "$1" ]; do
 	[[ "$1" == -* ]] || break
 	case "$1" in
 	-h|--help)	help "$0"; exit;;
-	-d|--max-depth)	max_depth=$2; shift 2;;
-	-a|--show-all)	show_all='yes'; shift;;
-	-x|--expand)	expand_args='yes'; shift;;
-	-s|--show-status)	show_status='yes'; shift;;
+	-d|--max-depth)	max_depth=$2; shift;;
+	-a|--show-all)	show_all='yes';;
+	-x|--expand)	expand_args='yes';;
+	-s|--show-status)	show_status='yes';;
 	--)	shift; break;;
 	*)	echo "What's '$1'?"; exit 1;;
 	esac
+	shift
 done
 
 if [ "$expand_args" = 'yes' ]; then
