@@ -6,6 +6,7 @@ declare -i max_depth=2
 indent_step='   '
 show_all='no'
 expand_args='no'
+show_status='no'
 seen_list=$(mktemp -p /var/tmp -t depdeb.XXXXXXXXXX)
 
 cleanup () {
@@ -36,6 +37,8 @@ wantees () {
 }
 
 pkg_status () {
+	[ "$show_status" = 'no' ] && return
+
 	local pkg="$1"
 	local status=$(echo `dpkg -s "$pkg" 2>/dev/null | grep '^Status:' | cut -d: -f2-`)
 	local result="u ($status)"
@@ -112,6 +115,7 @@ help () {
 	-a, --show-all -- show "hidden" packages ($show_all)
 	-d, --max-depth <N> -- set max depth to <N> ($max_depth)
 	-x, --expand-args -- expand arguments into package names ($expand_args)
+	-s, --show-status -- show installation status for packages ($show_status)
 
 	Legend:
 	suffix	means
@@ -129,6 +133,7 @@ while [ -n "$1" ]; do
 	-d|--max-depth)	max_depth=$2; shift 2;;
 	-a|--show-all)	show_all='yes'; shift;;
 	-x|--expand)	expand_args='yes'; shift;;
+	-s|--show-status)	show_status='yes'; shift;;
 	--)	shift; break;;
 	*)	echo "What's '$1'?"; exit 1;;
 	esac
