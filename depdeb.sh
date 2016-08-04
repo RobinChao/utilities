@@ -17,6 +17,23 @@ cleanup () {
 
 trap cleanup EXIT
 
+error () {
+	local -i rc=$1
+	shift
+	echo "/$@" | cut -d/ -f2- >&2
+	exit $rc
+}
+
+check_bin () {
+	local man="$1"
+	local bin="$2"
+
+	type -p "$bin" >/dev/null 2>&1 || error 1 "No $bin($man) here."
+}
+
+check_bin 1 dpkg
+check_bin 8 apt-cache
+
 stats () {
 	local -i nseen=$(wc -l < $seen_list)
 
@@ -152,7 +169,7 @@ while [ -n "$1" ]; do
 	-x|--expand)	expand_args='yes';;
 	-s|--show-status)	show_status='yes';;
 	--)	shift; break;;
-	*)	echo "What's '$1'?"; exit 1;;
+	*)	error 1 "What's '$1'?";;
 	esac
 	shift
 done
