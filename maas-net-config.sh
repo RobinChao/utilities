@@ -17,6 +17,9 @@ ntp_host='ntp.ubuntu.com'
 interfaces='/etc/network/interfaces'
 sysctl='/etc/sysctl.conf'
 
+netcat='nc'
+type -p "$netcat" >/dev/null 2>&1 || netcat=''
+
 all_ok='yes'
 
 error () {
@@ -231,6 +234,14 @@ grep -Hn 'net.ipv4.ip_forward[[:space:]]*=[[:space:]]*1' "$sysctl" \
 	|| error 1 "You must add 'net.ipv4.ip_forward=1' to '$sysctl'."
 grep -q '#[[:space:]]*net.ipv4.ip_forward[[:space:]]*=[[:space:]]*1' "$sysctl" \
 	&& error 1 "You must uncomment the line and reload with '$SUDO sysctl -p'."
+
+if [ -n "$netcat" ]; then
+	echo
+	"$netcat" -vzuw1 "$ntp_host" 123 || error 1 "NTP host '$ntp_host' unreachable."
+	echo "# NTP server '$ntp_host' looks ok."
+else
+	warn "Cannot check NTP availability."
+fi
 
 echo
 [ "$all_ok" = 'yes' ] && echo "# Congrats! It looks like everything is fine!"
