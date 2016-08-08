@@ -6,6 +6,7 @@ cat >/dev/tty <<-EOT
 	# It should be ran on a MAAS Controller Node.
 	# Follow the advises, if any.
 	# Run again until no advises shown.
+	# The script will NOT change anything.
 
 EOT
 
@@ -188,8 +189,8 @@ check_ifconfig () {
 
 check_ifconfig "$interfaces"
 
-[ "$eth0_found" = 'no' ] && error 1 "No config for external '$eth0'."
-[ "$eth1_found" = 'no' ] && error 1 "No config for internal '$eth1'."
+[ "$eth0_found" = 'no' ] && warn "No config for external '$eth0'."
+[ "$eth1_found" = 'no' ] && warn "No config for internal '$eth1'."
 echo "# Interfaces '$eth0' (external) and '$eth1' (internal) somehow configured."
 echo
 
