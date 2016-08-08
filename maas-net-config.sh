@@ -241,6 +241,9 @@ grep -Hn 'net.ipv4.ip_forward[[:space:]]*=[[:space:]]*1' "$sysctl" \
 grep -q '#[[:space:]]*net.ipv4.ip_forward[[:space:]]*=[[:space:]]*1' "$sysctl" \
 	&& error 1 "You must uncomment the line and reload with '$SUDO sysctl -p'."
 
+cut -d\# -f1 /etc/resolv.conf | grep -qw '^nameserver' \
+	|| error 1 "No nameserver configured. Run \`echo nameserver 8.8.8.8|resolvconf -a '$eth0'\`."
+
 if [ -n "$netcat" ]; then
 	echo
 	"$netcat" -vzuw1 "$ntp_host" 123 || error 1 "NTP host '$ntp_host' unreachable."
