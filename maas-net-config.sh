@@ -30,18 +30,23 @@ error () {
 	exit $rc
 }
 
+ip=$(type -p "ip" 2>/dev/null) || error 1 "No 'ip' (install iproute2)."
+ifconfig=$(type -p "ifconfig" 2>/dev/null) || error 1 "No 'ifconfig' (install net-tools)."
+route=$(type -p "route" 2>/dev/null) || error 1 "No 'route' (install net-tools)."
+iptables=$(type -p "iptables" 2>/dev/null) || error 1 "No 'iptables' (install iptables)."
+
 warn () {
 	all_ok='no'
 	echo "WARNING: $@" >&1
 }
 
 intf_list () {
-	ifconfig -s | awk 'NR>1{print $1;}'
+	$ifconfig -s | awk 'NR>1{print $1;}'
 }
 
 intf_addrs () {
 	local intf="$1"
-	ip addr show dev "$intf" \
+	$ip addr show dev "$intf" \
 	| grep -o 'inet [0-9.]\+' \
 	| cut -d' ' -f2
 }
@@ -136,10 +141,10 @@ if ! intf_ok "$eth1"; then
 fi
 
 echo "# External link via '$eth0':"
-/sbin/ifconfig "$eth0" || error $? "No link '$eth0'."
+$ifconfig "$eth0" || error $? "No link '$eth0'."
 
 echo "# Internal link via '$eth1':"
-/sbin/ifconfig "$eth1" || error $? "No link '$eth1'."
+$ifconfig "$eth1" || error $? "No link '$eth1'."
 
 echo "# System-wide interface config ($interfaces):"
 eth0_found='no'
@@ -189,15 +194,15 @@ echo "# Interfaces '$eth0' (external) and '$eth1' (internal) somehow configured.
 echo
 
 echo "# Local routing:"
-route -n
-route -n | grep -q "[[:space:]]\+$eth0\$" || error 1 "Interface '$eth0' is never used."
-route -n | grep -q "[[:space:]]\+$eth1\$" || error 1 "Interface '$eth1' is never used."
+$route -n
+$route -n | grep -q "[[:space:]]\+$eth0\$" || error 1 "Interface '$eth0' is never used."
+$route -n | grep -q "[[:space:]]\+$eth1\$" || error 1 "Interface '$eth1' is never used."
 echo "# Both interfaces are in use. Good."
 echo
 
 echo "# Local NAT config:"
 W=''
-$SUDO /sbin/iptables -S -t nat
+$SUDO $iptables -S -t nat
 output_has_word "$eth0" 'NAT config' "$SUDO /sbin/iptables -S -t nat" || W='yes'
 if [ "$W" = 'yes' ]; then
 	cat >&2 <<-EOT
@@ -205,7 +210,7 @@ if [ "$W" = 'yes' ]; then
 		# -t nat -A POSTROUTING -o $eth0 -j MASQUERADE
 EOT
 fi
-$SUDO /sbin/iptables -t nat -S POSTROUTING | grep -qw MASQUERADE \
+$SUDO $iptables -t nat -S POSTROUTING | grep -qw MASQUERADE \
 	|| error 1 "No MASQUERADE rule in POSTROUTING chain (table 'nat')."
 echo
 
@@ -218,7 +223,7 @@ echo
 
 echo "# Local forwarding policy:"
 W=''
-$SUDO /sbin/iptables -S FORWARD
+$SUDO $iptables -S FORWARD
 output_has_word "$eth0" 'routing' "$SUDO /sbin/iptables -S FORWARD" || W='yes'
 output_has_word "$eth1" 'routing' "$SUDO /sbin/iptables -S FORWARD" || W='yes'
 if [ "$W" = 'yes' ]; then
