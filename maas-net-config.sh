@@ -56,7 +56,8 @@ intf_list_long () {
 	local i='' a=''
 
 	while read i; do
-		a=$(intf_addrs "$i")
+		a=$(intf_addrs "$i" | tr -s '[:space:]' ' ')
+		a=$(echo $a)
 		echo -e "$i ($a)"
 	done < <(intf_list)
 }
@@ -194,10 +195,16 @@ check_ifconfig "$interfaces"
 echo "# Interfaces '$eth0' (external) and '$eth1' (internal) somehow configured."
 echo
 
+# base interfaces, if any
+eth0b="$eth0"
+echo "/$eth0/" | grep -q ':' && eth0b=$(echo "$eth0"|cut -d: -f1)
+eth1b="$eth1"
+echo "/$eth1/" | grep -q ':' && eth1b=$(echo "$eth1"|cut -d: -f1)
+
 echo "# Local routing:"
 $route -n
-$route -n | grep -q "[[:space:]]\+$eth0\$" || error 1 "Interface '$eth0' is never used."
-$route -n | grep -q "[[:space:]]\+$eth1\$" || error 1 "Interface '$eth1' is never used."
+$route -n | grep -q "[[:space:]]\+$eth0b\$" || error 1 "Interface '$eth0' is never used."
+$route -n | grep -q "[[:space:]]\+$eth1b\$" || error 1 "Interface '$eth1' is never used."
 echo "# Both interfaces are in use. Good."
 echo
 
