@@ -35,6 +35,7 @@ ip=$(type -p "ip" 2>/dev/null) || error 1 "No 'ip' (install iproute2)."
 ifconfig=$(type -p "ifconfig" 2>/dev/null) || error 1 "No 'ifconfig' (install net-tools)."
 route=$(type -p "route" 2>/dev/null) || error 1 "No 'route' (install net-tools)."
 iptables=$(type -p "iptables" 2>/dev/null) || error 1 "No 'iptables' (install iptables)."
+ethtool=$(type -p "ethtool" 2>/dev/null) || error 1 "No 'ethtool' (install ethtool)."
 
 warn () {
 	all_ok='no'
@@ -93,11 +94,30 @@ select_except () {
 	done </dev/tty
 }
 
+intf_base () {
+	local intf="$1"
+	local base=$($ip link show dev "$intf" | head -n1 | cut -d: -f2)
+	echo $base
+}
+
+intf_up () {
+	local intf="$1"
+	$ip addr show dev "$intf" | head -n1 | grep -wq 'state UP'
+}
+
+link_up () {
+	local intf="$1"
+	local link=$($ethtool "$intf" 2>/dev/null | grep '^[[:space:]]\+Link detected: yes$')
+	test -n "$link"
+}
+
 intf_ok () {
 	local intf="$1"
 
 	[ -z "$intf" ] && return 1
-	intf_list | grep -wq "^$intf\$"
+	intf_list | grep -wq "^$intf\$" || return 1
+	intf_up "$intf" || { warn "Interface '$intf' is DONW."; return 1; }
+	link_up "$intf" || { warn "Link '$intf' is DONW."; return 1; }
 }
 
 quote_all_words () {
@@ -131,22 +151,24 @@ else
 fi
 
 if ! intf_ok "$eth0"; then
-	echo "# Please, select _external_ interface:" >&2
+	echo "# Please, select _external_ interface (type number):" >&2
 	eth0=$(intf_list_long | select_except $eth0 $eth1)
 	intf_ok "$eth0" || error 1 "No external interface '$eth0'."
 fi
 
 if ! intf_ok "$eth1"; then
-	echo "# Please, select _internal_ interface:" >&2
+	echo "# Please, select _internal_ interface (type number):" >&2
 	eth1=$(intf_list_long | select_except $eth0 $eth1)
 	intf_ok "$eth1" || error 1 "No external interface '$eth1'."
 fi
 
 echo "# External link via '$eth0':"
-$ifconfig "$eth0" || error $? "No link '$eth0'."
+$ifconfig "$eth0" || error $? "No interface '$eth0'."
+$ethtool "$eth0" || error $? "No link '$eth0'."
 
 echo "# Internal link via '$eth1':"
 $ifconfig "$eth1" || error $? "No link '$eth1'."
+$ethtool "$eth1" || error $? "No link '$eth1'."
 
 echo "# System-wide interface config ($interfaces):"
 eth0_found='no'
@@ -196,10 +218,8 @@ echo "# Interfaces '$eth0' (external) and '$eth1' (internal) somehow configured.
 echo
 
 # base interfaces, if any
-eth0b="$eth0"
-echo "/$eth0/" | grep -q ':' && eth0b=$(echo "$eth0"|cut -d: -f1)
-eth1b="$eth1"
-echo "/$eth1/" | grep -q ':' && eth1b=$(echo "$eth1"|cut -d: -f1)
+eth0b=$(intf_base "$eth0")
+eth1b=$(intf_base "$eth1")
 
 echo "# Local routing:"
 $route -n
@@ -211,7 +231,7 @@ echo
 echo "# Local NAT config:"
 W=''
 $SUDO $iptables -S -t nat
-output_has_word "$eth0" 'NAT config' "$SUDO /sbin/iptables -S -t nat" || W='yes'
+output_has_word "$eth0" 'NAT config' "$SUDO $iptables -S -t nat" || W='yes'
 if [ "$W" = 'yes' ]; then
 	cat >&2 <<-EOT
 		# Consider adding these rules:
@@ -232,8 +252,8 @@ echo
 echo "# Local forwarding policy:"
 W=''
 $SUDO $iptables -S FORWARD
-output_has_word "$eth0" 'routing' "$SUDO /sbin/iptables -S FORWARD" || W='yes'
-output_has_word "$eth1" 'routing' "$SUDO /sbin/iptables -S FORWARD" || W='yes'
+output_has_word "$eth0" 'routing' "$SUDO $iptables -S FORWARD" || W='yes'
+output_has_word "$eth1" 'routing' "$SUDO $iptables -S FORWARD" || W='yes'
 if [ "$W" = 'yes' ]; then
 	cat >&2 <<-EOT
 		# Consider adding these rules:
@@ -255,6 +275,8 @@ if [ -n "$netcat" ]; then
 	echo
 	"$netcat" -vzuw1 "$ntp_host" 123 || error 1 "NTP host '$ntp_host' unreachable."
 	echo "# NTP server '$ntp_host' looks ok."
+	"$netcat" -vzuw1 "pool.ntp.org" 123 && echo "# You may use 'pool.ntp.org' for NTP."
+	
 else
 	warn "Cannot check NTP availability."
 fi
