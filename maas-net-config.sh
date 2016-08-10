@@ -148,6 +148,16 @@ private_ip () {
 	return 1
 }
 
+link_local_ip () {
+	local ipaddr="$1" # 169.254/16 minus the first and the last /24 subnetes RFC 6890, 3927
+
+	case "$ipaddr" in
+	169.254.0.*|169.254.255.*)	return 2;; ## ERROR ???
+	169.254.*.*) return 0;;
+	esac
+	return 1
+}
+
 quote_all_words () {
 	sed -e "1,\$s/[^ ]\+/'&'/g"
 }
@@ -265,6 +275,9 @@ check_ifconfig () {
 			address)
 				case "$idx" in
 				0|1)	echo -n -e "\t# <good>"
+					if echo "$a" | grep -q '^[0-9.]\+/[0-9]\+$'; then
+						a=$(echo $a|cut -d/ -f1)
+					fi
 					eval "eth${idx}_addr=$a"
 					;;
 				*)	;;
@@ -276,7 +289,7 @@ check_ifconfig () {
 			echo
 			;;
 		esac
-	done < <(grep -v '#' "$interfaces" | grep -v '^[ ]*$')
+	done < <(grep -v '^#' "$interfaces" | cut -d\# -f1 | grep -v '^[ ]*$')
 }
 
 check_ifconfig "$interfaces"
@@ -293,6 +306,8 @@ private_ip "$eth1_addr" || warn "Internal '$eth1' is using non-private IP '$eth1
 [ -z "$eth0_dns" ] && warn "No DNS config for external '$eth0'."
 [ -z "$eth1_dns" ] && note "No DNS config for internal '$eth1'."
 
+link_local_ip "$eth0_addr" && error 1 "Link-local IP on external '$eth0'."
+link_local_ip "$eth1_addr" && error 1 "Link-local IP on internal '$eth1'."
 
 (( $eth0_found > $eth1_found )) \
 	&& warn "You may want to have external '$eth0' configured before internal '$eth1'."
