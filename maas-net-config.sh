@@ -94,6 +94,11 @@ select_except () {
 	done </dev/tty
 }
 
+intf_is_slice () {
+	local intf="$1"
+	echo "/$intf/" | grep -q '^/.\+:.\+/$'
+}
+
 intf_base () {
 	local intf="$1"
 	local base=$($ip link show dev "$intf" | head -n1 | cut -d: -f2)
@@ -107,7 +112,7 @@ intf_up () {
 
 link_up () {
 	local intf="$1"
-	local link=$($ethtool "$intf" 2>/dev/null | grep '^[[:space:]]\+Link detected: yes$')
+	local link=$($SUDO $ethtool "$intf" 2>/dev/null | grep '^[[:space:]]\+Link detected: yes$')
 	test -n "$link"
 }
 
@@ -116,6 +121,7 @@ intf_ok () {
 
 	[ -z "$intf" ] && return 1
 	intf_list | grep -wq "^$intf\$" || return 1
+	intf_is_slice "$intf" && { warn "Subinterface '$intf' may NOT be used for MAAS!"; return 1; }
 	intf_up "$intf" || { warn "Interface '$intf' is DONW."; return 1; }
 	link_up "$intf" || { warn "Link '$intf' is DONW."; return 1; }
 }
@@ -153,22 +159,24 @@ fi
 if ! intf_ok "$eth0"; then
 	echo "# Please, select _external_ interface (type number):" >&2
 	eth0=$(intf_list_long | select_except $eth0 $eth1)
-	intf_ok "$eth0" || error 1 "No external interface '$eth0'."
+	test -n "$eth0" || error 1 "No external interface '$eth0'."
+	intf_ok "$eth0"
 fi
 
 if ! intf_ok "$eth1"; then
 	echo "# Please, select _internal_ interface (type number):" >&2
 	eth1=$(intf_list_long | select_except $eth0 $eth1)
-	intf_ok "$eth1" || error 1 "No external interface '$eth1'."
+	test -n "$eth1" || error 1 "No external interface '$eth1'."
+	intf_ok "$eth1"
 fi
 
 echo "# External link via '$eth0':"
 $ifconfig "$eth0" || error $? "No interface '$eth0'."
-$ethtool "$eth0" || error $? "No link '$eth0'."
+$SUDO $ethtool "$eth0" || error $? "No link '$eth0'."
 
 echo "# Internal link via '$eth1':"
 $ifconfig "$eth1" || error $? "No link '$eth1'."
-$ethtool "$eth1" || error $? "No link '$eth1'."
+$SUDO $ethtool "$eth1" || error $? "No link '$eth1'."
 
 echo "# System-wide interface config ($interfaces):"
 eth0_found='no'
