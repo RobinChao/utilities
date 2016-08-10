@@ -300,7 +300,7 @@ check_ifconfig "$interfaces"
 [ -z "$eth0_addr" ] && warn "No IP address configured for external '$eth0'."
 [ -z "$eth1_addr" ] && warn "No IP address configured for internal '$eth1'."
 
-private_ip "$eth0_addr" && warn "External '$eth0' is using private IP '$eth1_addr'."
+private_ip "$eth0_addr" && note "External '$eth0' is using private IP '$eth0_addr'."
 private_ip "$eth1_addr" || warn "Internal '$eth1' is using non-private IP '$eth1_addr'."
 
 [ -z "$eth0_dns" ] && warn "No DNS config for external '$eth0'."
