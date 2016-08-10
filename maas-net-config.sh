@@ -37,6 +37,14 @@ route=$(type -p "route" 2>/dev/null) || error 1 "No 'route' (install net-tools).
 iptables=$(type -p "iptables" 2>/dev/null) || error 1 "No 'iptables' (install iptables)."
 ethtool=$(type -p "ethtool" 2>/dev/null) || error 1 "No 'ethtool' (install ethtool)."
 
+good () {
+	echo "GOOD: $@" >&1
+}
+
+note () {
+	echo "NOTE: $@" >&1
+}
+
 warn () {
 	all_ok='no'
 	echo "WARNING: $@" >&1
@@ -126,6 +134,20 @@ intf_ok () {
 	link_up "$intf" || { warn "Link '$intf' is DONW."; return 1; }
 }
 
+private_ip () {
+	local ipaddr="$1" # 10/8, 172.16/12, 192.168/16 -- RFC 1918
+
+	case "$ipaddr" in
+	10.*.*.*)	return 0;;
+	172.16.*.*|172.17.*.*|172.18.*.*|172.19.*.*) return 0;;
+	172.20.*.*|172.21.*.*|172.22.*.*|172.23.*.*) return 0;;
+	172.24.*.*|172.25.*.*|172.26.*.*|172.27.*.*) return 0;;
+	172.28.*.*|172.29.*.*|172.30.*.*|172.31.*.*) return 0;;
+	192.168.*.*)	return 0;;
+	esac
+	return 1
+}
+
 quote_all_words () {
 	sed -e "1,\$s/[^ ]\+/'&'/g"
 }
@@ -179,50 +201,102 @@ $ifconfig "$eth1" || error $? "No link '$eth1'."
 $SUDO $ethtool "$eth1" || error $? "No link '$eth1'."
 
 echo "# System-wide interface config ($interfaces):"
-eth0_found='no'
-eth1_found='no'
+
+intf_stanza () {
+	case "$1" in
+	esac
+	return 1
+}
+
+eth0_found=''; eth0_dns=''; eth0_addr=''
+eth1_found=''; eth1_dns=''; eth1_addr=''
 
 check_ifconfig () {
+# TODO
+# 1. the external interface should be taken up _before_ the internal one
+# 2. the external interface should have resolver configured (dns_nameservers)
+#
 	local interfaces="$1"
-	local k='' a='' t=''
+	local k='' a='' t='' idx='_'
+	local -i line=0
 
 	while read k a t; do
-		if [ "$k" = 'source' ]; then
+		let line+=1
+		case "$k" in
+		mapping)
+			case "$a" in
+			"$eth0"*)	[ -z "$eth0_found" ] && eth0_found=$line; idx=0 ;;
+			"$eth1"*)	[ -z "$eth1_found" ] && eth1_found=$line; idx=1 ;;
+			*)		idx='x' ;;
+			esac
+			echo -e "$idx|\t$k $a $t" ;;
+		iface|auto|allow-*)
+			case "$a" in
+			"$eth0")	[ -z "$eth0_found" ] && eth0_found=$line; idx=0
+					echo -e "$idx=$a\t@$line"
+					;;
+			"$eth1")	[ -z "$eth1_found" ] && eth1_found=$line; idx=1
+					echo -e "$idx=$a\t@$line"
+					;;
+			*)		idx='x' ;;
+			esac
+			echo -e "$idx:\t$k $a $t" ;;
+		source)
+			echo -e "$idx:\t$k $a $t"
 			for t in $a; do
 				[ -r "$t" ] && check_ifconfig "$t"
-			done
-		elif [ "$k" = 'auto' ]; then
-			case "$a" in
-			"$eth0")	eth0_found='yes'
-					echo "0=$a"
-					echo -e "0|\t$k $a $t"
-					[ "$eth1_found" = 'no' ] || eth1_found='x'
-					continue;;
-			"$eth1")	eth1_found='yes'
-					echo "1=$a"
-					echo -e "1|\t$k $a $t"
-					[ "$eth0_found" = 'no' ] || eth0_found='x'
-					continue;;
-			*)		[ "$eth0_found" = 'no' ] || eth0_found='z'
-					[ "$eth1_found" = 'no' ] || eth1_found='z'
-					continue;;
+			done;;
+		source-directory)
+			echo -e "$idx:\t$k $a $t"
+			for t in $a/*; do
+				[ -r "$t" ] && check_ifconfig "$t"
+			done;;
+		*)
+			echo -n -e "$idx:\t$k $a $t"
+			case "$k" in
+			dns-nameservers)
+				case "$idx" in
+				0|1)	echo -n -e "\t# <good>"
+					eval "eth${idx}_dns=$line"
+					;;
+				*)	;;
+				esac
+				;;
+			address)
+				case "$idx" in
+				0|1)	echo -n -e "\t# <good>"
+					eval "eth${idx}_addr=$a"
+					;;
+				*)	;;
+				esac
+				;;
+			*)
+				;;
 			esac
-		fi
-		if [ "$eth0_found" = 'yes' ]; then
-			echo -e "0|\t$k $a $t"
-		elif [ "$eth1_found" = 'yes' ]; then
-			echo -e "1|\t$k $a $t"
-		else
-			: echo "x>$k|$a|$t<"
-		fi
+			echo
+			;;
+		esac
 	done < <(grep -v '#' "$interfaces" | grep -v '^[ ]*$')
 }
 
 check_ifconfig "$interfaces"
 
-[ "$eth0_found" = 'no' ] && warn "No config for external '$eth0'."
-[ "$eth1_found" = 'no' ] && warn "No config for internal '$eth1'."
-echo "# Interfaces '$eth0' (external) and '$eth1' (internal) somehow configured."
+[ -z "$eth0_found" ] && warn "No config for external '$eth0'."
+[ -z "$eth1_found" ] && warn "No config for internal '$eth1'."
+
+[ -z "$eth0_addr" ] && warn "No IP address configured for external '$eth0'."
+[ -z "$eth1_addr" ] && warn "No IP address configured for internal '$eth1'."
+
+private_ip "$eth0_addr" && warn "External '$eth0' is using private IP '$eth1_addr'."
+private_ip "$eth1_addr" || warn "Internal '$eth1' is using non-private IP '$eth1_addr'."
+
+[ -z "$eth0_dns" ] && warn "No DNS config for external '$eth0'."
+[ -z "$eth1_dns" ] && note "No DNS config for internal '$eth1'."
+
+
+(( $eth0_found > $eth1_found )) \
+	&& warn "You may want to have external '$eth0' configured before internal '$eth1'."
+good "Interfaces '$eth0' (external) and '$eth1' (internal) somehow configured."
 echo
 
 # base interfaces, if any
@@ -233,7 +307,7 @@ echo "# Local routing:"
 $route -n
 $route -n | grep -q "[[:space:]]\+$eth0b\$" || error 1 "Interface '$eth0' is never used."
 $route -n | grep -q "[[:space:]]\+$eth1b\$" || error 1 "Interface '$eth1' is never used."
-echo "# Both interfaces are in use. Good."
+good "Both interfaces are in use."
 echo
 
 echo "# Local NAT config:"
@@ -241,9 +315,11 @@ W=''
 $SUDO $iptables -S -t nat
 output_has_word "$eth0" 'NAT config' "$SUDO $iptables -S -t nat" || W='yes'
 if [ "$W" = 'yes' ]; then
+	warn "You may have troubles with external connectivity for deployed machines."
 	cat >&2 <<-EOT
 		# Consider adding these rules:
 		# -t nat -A POSTROUTING -o $eth0 -j MASQUERADE
+
 EOT
 fi
 $SUDO $iptables -t nat -S POSTROUTING | grep -qw MASQUERADE \
@@ -252,9 +328,9 @@ echo
 
 echo "# Kernel support for NAT:"
 n=$($SUDO find /sys/module/ -name '*_nat*' -exec ls -ld {} \; | grep -v /holders/ | wc -l)
-(( $n == 0 )) && error 1 "No NAT kernel support found." || echo "# Kernel has modules, good."
+(( $n == 0 )) && error 1 "No NAT kernel support found." || good "Kernel has modules."
 
-lsmod | grep nat_ && echo "# NAT modules loaded." || warn "No NAT kernel modules loaded."
+lsmod | grep nat_ && good "NAT modules loaded." || warn "No NAT kernel modules loaded."
 echo
 
 echo "# Local forwarding policy:"
@@ -263,11 +339,13 @@ $SUDO $iptables -S FORWARD
 output_has_word "$eth0" 'routing' "$SUDO $iptables -S FORWARD" || W='yes'
 output_has_word "$eth1" 'routing' "$SUDO $iptables -S FORWARD" || W='yes'
 if [ "$W" = 'yes' ]; then
+	warn "You may not have external connectivity for deployed machines."
 	cat >&2 <<-EOT
 		# Consider adding these rules:
 		# -A FORWARD -i $eth0 -o $eth1 -m state --state RELATED,ESTABLISHED -j ACCEPT
 		# -A FORWARD -i $eth1 -o $eth0 -j ACCEPT
 EOT
+else	good "Local forwarding looks set up."
 fi
 echo
 
@@ -282,13 +360,14 @@ cut -d\# -f1 /etc/resolv.conf | grep -qw '^nameserver' \
 if [ -n "$netcat" ]; then
 	echo
 	"$netcat" -vzuw1 "$ntp_host" 123 || error 1 "NTP host '$ntp_host' unreachable."
-	echo "# NTP server '$ntp_host' looks ok."
-	"$netcat" -vzuw1 "pool.ntp.org" 123 && echo "# You may use 'pool.ntp.org' for NTP."
+	good "NTP server '$ntp_host' looks ok."
+	"$netcat" -vzuw1 "pool.ntp.org" 123 && good "You may use 'pool.ntp.org' for NTP."
 	
 else
 	warn "Cannot check NTP availability."
 fi
 
 echo
-[ "$all_ok" = 'yes' ] && echo "# Congrats! It looks like everything is fine!"
+[ "$all_ok" = 'yes' ]	&& echo "# Congrats! It looks like everything is fine!" \
+			|| warn "Check your network config!"
 # EOF #
