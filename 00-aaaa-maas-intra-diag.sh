@@ -7,6 +7,8 @@ iptables=/sbin/iptables
 iptsave=/sbin/iptables-save
 ethtool=/sbin/ethtool
 arp=''
+apt_get=/usr/bin/apt-get
+ping=/bin/ping
 
 binpwd=/bin/pwd
 uname=/bin/uname
@@ -24,6 +26,7 @@ has () {
 run () {
 	echo "# RUN [$@]"
 	"$@" 2>&1
+	echo "# Return Code [$?]"
 }
 
 divline () {
@@ -44,14 +47,16 @@ divline "Running as '$0'"
 echo "# [[$0 $@]] #"
 
 divline 'Tools available'
-has $binpwd || binpwd=''
-has $uname || uname=''
-has $ip || ip=''
-has $ifconfig || ifconfig=''
-has $route || route=''
-has $iptables || iptables=''
-has $iptsave || iptsave=''
-has $ethtool || ethtool=''
+has $binpwd	|| binpwd=''
+has $uname	|| uname=''
+has $ip		|| ip=''
+has $ifconfig	|| ifconfig=''
+has $route	|| route=''
+has $iptables	|| iptables=''
+has $iptsave	|| iptsave=''
+has $ethtool	|| ethtool=''
+has $apt_get	|| apt_get=''
+has $ping	|| ping=''
 
 has /sbin/arp && arp=/sbin/arp
 has /usr/sbin/arp && arp=/usr/sbin/arp
@@ -73,15 +78,32 @@ ethernets () {
 	done
 }
 
-netconfig () {
-	local netconf=/etc/network/interfaces
+test_file () {
+	local fname="$1"
 
-	divline "$netconf" file
-	if test -f "$netconf"; then
-		ls -ldF "$netconf"
-		cat -nvE "$netconf"
+	divline "$fname" file
+	if test -f "$fname"; then
+		ls -ldF "$fname" 2>&1 && cat -nvE "$fname"
 	else
-		echo "# ! No '$netconf'."
+		echo "# ! No file '$fname'."
+	fi
+}
+
+check_files () {
+	local file=''
+
+	for file in	/etc/network/interfaces \
+			/etc/resolv.conf	\
+			/etc/apt/sources.list
+	do
+		test_file "$file"
+	done
+}
+
+list_apt_hosts () {
+	if test -f /etc/apt/sources.list; then
+		grep '^deb' < /etc/apt/sources.list \
+		| tr -s '[ \t]' '\t'  | cut -f2 | cut -d/ -f3 | sort -u
 	fi
 }
 
@@ -89,7 +111,8 @@ run_test 'pwd'
 run_test "$binpwd"
 run_test "$uname" -a
 
-netconfig
+check_files
+
 run_test "$ip" link
 run_test "$ip" addr
 run_test "$ifconfig" -a
@@ -98,6 +121,14 @@ run_test "$route" -n
 run_test "$iptables" -L -n
 run_test "$iptsave"
 run_test "$arp" -n
+
+if test -n "$ping"; then
+	for h in ntp.ubuntu.com pool.ntp.org `list_apt_hosts`; do
+		run_test "$ping" -c5 -W2 "$h"
+	done
+fi
+
+run_test "$apt_get" --yes --force-yes lldpd
 
 run_test 'set' # environment
 
