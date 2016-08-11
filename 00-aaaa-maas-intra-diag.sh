@@ -1,18 +1,5 @@
 #!/bin/sh
 
-ip=/sbin/ip
-ifconfig=/sbin/ifconfig
-route=/sbin/route
-iptables=/sbin/iptables
-iptsave=/sbin/iptables-save
-ethtool=/sbin/ethtool
-arp=''
-apt_get=/usr/bin/apt-get
-ping=/bin/ping
-
-binpwd=/bin/pwd
-uname=/bin/uname
-
 has () {
 	if test -x "$1"; then
 		echo "# Has '$1'."
@@ -47,19 +34,27 @@ divline "Running as '$0'"
 echo "# [[$0 $@]] #"
 
 divline 'Tools available'
-has $binpwd	|| binpwd=''
-has $uname	|| uname=''
-has $ip		|| ip=''
-has $ifconfig	|| ifconfig=''
-has $route	|| route=''
-has $iptables	|| iptables=''
-has $iptsave	|| iptsave=''
-has $ethtool	|| ethtool=''
-has $apt_get	|| apt_get=''
-has $ping	|| ping=''
 
-has /sbin/arp && arp=/sbin/arp
-has /usr/sbin/arp && arp=/usr/sbin/arp
+# /bin
+has /bin/pwd	&& binpwd=/bin/pwd	|| binpwd=''
+has /bin/uname	&& uname=/bin/uname	|| uname=''
+has /bin/ping	&& ping=/bin/ping	|| ping=''
+has /bin/netstat	&& netstat=/bin/netstat	|| netstat=''
+
+# /sbin
+has /sbin/ip		&& ip=/sbin/ip			|| ip=''
+has /sbin/ifconfig	&& ifconfig=/sbin/ifconfig	|| ifconfig=''
+has /sbin/route		&& route=/sbin/route		|| route=''
+has /sbin/iptables	&& iptables=/sbin/iptables	|| iptables=''
+has /sbin/iptables-save	&& iptsave=/sbin/iptables-save	|| iptsave=''
+has /sbin/ethtool	&& ethtool=/sbin/ethtool	|| ethtool=''
+
+# /usr/bin
+has /usr/bin/apt-get	&& apt_get=/usr/bin/apt-get	|| apt_get=''
+
+# other
+has /usr/sbin/arp && arp=/usr/sbin/arp || arp=''
+test -z "$arp" && has /sbin/arp && arp=/sbin/arp
 
 interfaces () {
 	if test -n "$ip"; then
@@ -122,13 +117,15 @@ run_test "$iptables" -L -n
 run_test "$iptsave"
 run_test "$arp" -n
 
+run_test "$netstat" -A inet -anp
+
 if test -n "$ping"; then
 	for h in ntp.ubuntu.com pool.ntp.org `list_apt_hosts`; do
 		run_test "$ping" -c5 -W2 "$h"
 	done
 fi
 
-run_test "$apt_get" --yes --force-yes lldpd
+run_test "$apt_get" install -y --force-yes --allow-unauthenticated lldpd
 
 run_test 'set' # environment
 
