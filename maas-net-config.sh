@@ -181,6 +181,22 @@ output_has_word () {
 	fi
 }
 
+must_have_service () {
+	local service="$1"
+	local file="/lib/systemd/system/$service.service"
+
+	[ -e "$file" ] || {
+		note "There is no service file '$file'."
+		note "This may be an unsupported distro."
+		return
+	}
+	$SUDO service "$service" status >"$tempFile" 2>&1 \
+		|| error 1 "You must have '$service' \"service\": $(< $tempFile)"
+	grep '^'$service'[[:space:]]\+start/running' < "$tempFile" \
+		|| error 1 "Please start '$service' \"service\": $(< $tempFile)"
+	good "$service is up and running."
+}
+
 [ -f "$interfaces" ] || error 1 "No '$interfaces' - wrong distriution."
 
 #
@@ -378,11 +394,11 @@ grep -q '#[[:space:]]*net.ipv4.ip_forward[[:space:]]*=[[:space:]]*1' "$sysctl" \
 cut -d\# -f1 /etc/resolv.conf | grep -qw '^nameserver' \
 	|| error 1 "No nameserver configured. Run \`echo nameserver 8.8.8.8|resolvconf -a '$eth0'\`."
 
-$SUDO service maas-proxy status >"$tempFile" 2>&1 \
-	|| error 1 "You must have 'maas-proxy' \"service\": $(< $tempFile)"
-grep '^maas-proxy start/running' < "$tempFile" \
-	|| error 1 "Please start 'maas-proxy' \"service\": $(< $tempFile)"
-good "maas-proxy is up and running."
+must_have_service maas-rackd
+must_have_service maas-clusterd
+must_have_service maas-regiond
+must_have_service maas-dhcpd
+must_have_service maas-proxy
 $SUDO netstat -A inet -anp | grep /squid
 echo
 
