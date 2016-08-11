@@ -23,6 +23,12 @@ type -p "$netcat" >/dev/null 2>&1 || netcat=''
 
 all_ok='yes'
 
+tempFile=$(mktemp --tmpdir=/tmp)
+cleanup () {
+	rm -f "$tempFile"
+}
+trap cleanup EXIT
+
 error () {
 	local -i rc=$1
 	shift
@@ -371,6 +377,14 @@ grep -q '#[[:space:]]*net.ipv4.ip_forward[[:space:]]*=[[:space:]]*1' "$sysctl" \
 
 cut -d\# -f1 /etc/resolv.conf | grep -qw '^nameserver' \
 	|| error 1 "No nameserver configured. Run \`echo nameserver 8.8.8.8|resolvconf -a '$eth0'\`."
+
+$SUDO service maas-proxy status >"$tempFile" 2>&1 \
+	|| error 1 "You must have 'maas-proxy' \"service\": $(< $tempFile)"
+grep '^maas-proxy start/running' < "$tempFile" \
+	|| error 1 "Please start 'maas-proxy' \"service\": $(< $tempFile)"
+good "maas-proxy is up and running."
+$SUDO netstat -A inet -anp | grep /squid
+echo
 
 if [ -n "$netcat" ]; then
 	echo
