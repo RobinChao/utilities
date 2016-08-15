@@ -51,6 +51,7 @@ has /sbin/ethtool	&& ethtool=/sbin/ethtool	|| ethtool=''
 
 # /usr/bin
 has /usr/bin/apt-get	&& apt_get=/usr/bin/apt-get	|| apt_get=''
+has /usr/bin/dpkg	&& dpkg=/usr/bin/dpkg		|| dpkg=''
 
 # other
 has /usr/sbin/arp && arp=/usr/sbin/arp || arp=''
@@ -106,6 +107,11 @@ run_test 'pwd'
 run_test "$binpwd"
 run_test "$uname" -a
 
+if [ -n "$dpkg" ]; then
+	divline "Packages installed"
+	dpkg -l | awk '($2=="openstack")||($2=="maas")||($2=="juju"){$1="";$4=":";print;}'
+fi
+
 check_files
 
 run_test "$ip" link
@@ -128,6 +134,8 @@ fi
 run_test "$apt_get" install -y --force-yes --allow-unauthenticated lldpd
 
 run_test 'set' # environment
+
+run_test "$dpkg" -l
 
 divline 'The End'
 
