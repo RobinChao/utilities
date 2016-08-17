@@ -20,6 +20,8 @@ sysctl='/etc/sysctl.conf'
 
 all_ok='yes'
 everything_done='no'
+stop_on_error='yes'
+
 declare -a messages=()
 
 tempFile=$(mktemp --tmpdir=/tmp)
@@ -57,7 +59,7 @@ error () {
 	shift
 	all_ok='no'
 	add_message "ERROR: $@" >&2
-	exit $rc
+	[ "$stop_on_error" = 'yes' ] && exit $rc
 }
 
 good () {
@@ -81,20 +83,79 @@ where () {
 	type -p "$1" 2>/dev/null
 }
 
-netcat=$(where "nc") || netcat=''
+OS_RELEASE=''
+os_release () {
+	if [ -f "/etc/os-release" ]; then
+		echo "# /etc/os-release:"
+		cat -nA "/etc/os-release"
+		OS_RELEASE="$(grep '^ID=' < "/etc/os-release" | cut -d= -f2- | tr -d '"')"
+		info "OS release: '$OS_RELEASE'."
+	else
+		note "Cannot detect OS release."
+	fi
+}
 
-ip=$(where "ip") || error 1 "No 'ip' (install iproute2)."
-ifconfig=$(where "ifconfig") || error 1 "No 'ifconfig' (install net-tools)."
-route=$(where "route") || error 1 "No 'route' (install net-tools)."
+do_help () {
+	local exe="$1"
+	cat <<-EOT >&2
+
+
+	$(basename "$exe") [options]
+
+	Options:
+	-h, --help -- this help
+	-c, --continue -- don't stop on errors
+
+
+
+EOT
+	exit 0
+}
+
+os_release
+
+while [ -n "$1" ]; do
+	case "$1" in
+	-c|--continue)	shift; stop_on_error='no';;
+	-h|--help)	do_help "$0";;
+	*)		error 1 "$0: what's '$1'?";;
+	esac
+done
+
+netcat=$(where "nc") || note "No 'netcat' facility."
+
+ip=$(where "ip") || warn "No 'ip' (install iproute2)."
+ifconfig=$(where "ifconfig") || warn "No 'ifconfig' (install net-tools)."
+route=$(where "route") || warn "No 'route' (install net-tools)."
+
+[ -z "$ip" -a -z "$ifconfig" ] && error 1 "No way to check interfaces."
+[ -z "$ip" -a -z "$route" ] && error 1 "No way to check routes."
+
 iptables=$(where "iptables") || error 1 "No 'iptables' (install iptables)."
 ethtool=$(where "ethtool") || error 1 "No 'ethtool' (install ethtool)."
+
+netstat=$(where 'netstat') || note "No 'netstat' tool."
 
 has_access_to () {
 	[ -n "$netcat" -a -x "$netcat" ] && $netcat -vzw1 "$@"
 }
 
 intf_list () {
-	$ifconfig -s | awk 'NR>1{print $1;}'
+	if [ -n "$ip" ]; then
+		$ip -o link | cut -d: -f2 | tr -d '[ \t]'
+	elif [ -n "$ifconfig" ]; then
+		$ifconfig -s | awk 'NR>1{print $1;}'
+	fi
+}
+
+intf_exists () {
+	local intf="$1"
+
+	if [ -n "$ip" ]; then
+		$ip link show dev "$intf" >/dev/null 2>&1
+	elif [ -n "$ifconfig" ]; then
+		$ifconfig "$intf" >/dev/null 2>&1
+	fi
 }
 
 intf_addrs () {
@@ -236,7 +297,11 @@ must_have_service () {
 	good "$service is up and running."
 }
 
-[ -f "$interfaces" ] || error 1 "No '$interfaces' - wrong distriution."
+case "$OS_RELEASE" in
+ubuntu)	[ -f "$interfaces" ] || error 1 "No '$interfaces' - wrong distriution.";;
+rhel)	[ -d "/etc/sysconfig/network-scripts/." ] || error 1 "No '/etc/sysconfig/network-scripts'.";;
+*)	error 1 "Don't know how to configure network in '$OS_RELEASE'.";;
+esac
 
 #
 
@@ -264,11 +329,11 @@ if ! intf_ok "$eth1"; then
 fi
 
 info "External link via '$eth0' ($(intf_addrs "$eth0"))."
-$ifconfig "$eth0" || error $? "No interface '$eth0'."
+intf_exists "$eth0" || error $? "No interface '$eth0'."
 $SUDO $ethtool "$eth0" || error $? "No link '$eth0'."
 
 info "Internal link via '$eth1' ($(intf_addrs "$eth1"))."
-$ifconfig "$eth1" || error $? "No link '$eth1'."
+intf_exists "$eth1" || error $? "No link '$eth1'."
 $SUDO $ethtool "$eth1" || error $? "No link '$eth1'."
 
 echo "# System-wide interface config ($interfaces):"
@@ -282,7 +347,25 @@ intf_stanza () {
 eth0_found=''; eth0_dns=''; eth0_addr=''
 eth1_found=''; eth1_dns=''; eth1_addr=''
 
-check_ifconfig () {
+check_rhel_ifconfig () {
+	local netcfgd='/etc/sysconfig/network-scripts/'
+	local f=''
+
+	for f in $netcfgd/ifcfg-${eth0}*; do
+		[ -f "$f" ] || break
+		eth0_found="$eth0_found:$f"
+		eth0_dns=$(grep '^DNS[0-9]\+=' < "$f" | cut -d= -f2-) 
+		eth0_addr=$(grep '^IPADDR=' < "$f" | cut -d= -f2-) 
+	done
+	for f in $netcfgd/ifcfg-${eth1}*; do
+		[ -f "$f" ] || break
+		eth1_found="$eth1_found:$f"
+		eth1_dns=$(grep '^DNS[0-9]\+=' < "$f" | cut -d= -f2-) 
+		eth1_addr=$(grep '^IPADDR=' < "$f" | cut -d= -f2-) 
+	done
+}
+
+check_ubuntu_ifconfig () {
 # TODO
 # 1. the external interface should be taken up _before_ the internal one
 # 2. the external interface should have resolver configured (dns_nameservers)
@@ -351,9 +434,16 @@ check_ifconfig () {
 			;;
 		esac
 	done < <(grep -v '^#' "$interfaces" | cut -d\# -f1 | grep -v '^[ ]*$')
+
+	(( $eth0_found > $eth1_found )) \
+		&& warn "You may want to have external '$eth0' configured before internal '$eth1'."
 }
 
-check_ifconfig "$interfaces"
+case "$OS_RELEASE" in
+ubuntu)	check_ubuntu_ifconfig "$interfaces";;
+rhel)	check_rhel_ifconfig;;
+*)	error 1 "Don't know how to configure network in '$OS_RELEASE' (2).";;
+esac
 
 [ -z "$eth0_found" ] && warn "No config for external '$eth0'."
 [ -z "$eth1_found" ] && warn "No config for internal '$eth1'."
@@ -370,8 +460,6 @@ private_ip "$eth1_addr" || warn "Internal '$eth1' is using non-private IP '$eth1
 link_local_ip "$eth0_addr" && error 1 "Link-local IP on external '$eth0'."
 link_local_ip "$eth1_addr" && error 1 "Link-local IP on internal '$eth1'."
 
-(( $eth0_found > $eth1_found )) \
-	&& warn "You may want to have external '$eth0' configured before internal '$eth1'."
 good "Interfaces '$eth0' (external) and '$eth1' (internal) somehow configured."
 echo
 
@@ -380,10 +468,17 @@ eth0b=$(intf_base "$eth0")
 eth1b=$(intf_base "$eth1")
 
 echo "# Local routing:"
-$route -n
-$route -n | grep -q "[[:space:]]\+$eth0b\$" || error 1 "Interface '$eth0' is never used."
-$route -n | grep -q "[[:space:]]\+$eth1b\$" || error 1 "Interface '$eth1' is never used."
-good "Both interfaces are in use."
+if [ -n "$ip" ]; then
+	$ip route list
+	$ip route list | grep -q " dev $eth0b " || error 1 "Interface '$eth0' is never used."
+	$ip route list | grep -q " dev $eth1b " || error 1 "Interface '$eth1' is never used."
+	good "Both interfaces are in use."
+elif [ -n "$route"]; then
+	$route -n
+	$route -n | grep -q "[[:space:]]\+$eth0b\$" || error 1 "Interface '$eth0' is never used."
+	$route -n | grep -q "[[:space:]]\+$eth1b\$" || error 1 "Interface '$eth1' is never used."
+	good "Both interfaces are in use."
+fi
 echo
 
 echo "# Local NAT config:"
@@ -438,7 +533,7 @@ must_have_service maas-clusterd
 must_have_service maas-regiond
 must_have_service maas-dhcpd
 must_have_service maas-proxy
-$SUDO netstat -A inet -anp | grep /squid
+[ -n "$netsat" ] && { $SUDO $netstat -A inet -anp | grep /squid; }
 echo
 
 # check for some files 

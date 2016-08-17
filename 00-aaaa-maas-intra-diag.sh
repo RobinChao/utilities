@@ -90,7 +90,8 @@ check_files () {
 
 	for file in	/etc/network/interfaces \
 			/etc/resolv.conf	\
-			/etc/apt/sources.list
+			/etc/apt/sources.list	\
+			/etc/os-release
 	do
 		test_file "$file"
 	done
