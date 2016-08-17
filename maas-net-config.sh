@@ -19,23 +19,32 @@ interfaces='/etc/network/interfaces'
 sysctl='/etc/sysctl.conf'
 
 all_ok='yes'
+everything_done='no'
 declare -a messages=()
 
 tempFile=$(mktemp --tmpdir=/tmp)
 cleanup () {
 	rm -f "$tempFile"
 
-	echo "========================================================================"
-	local -i i=0
+	message_summary > /dev/tty
+}
+trap cleanup EXIT
 
-	echo "=== Check summary:"
+message_summary () {
+	local -i i=0
+	local c='completed'
+
+	echo "========================================================================"
+	if [ "$everything_done" != 'yes' ]; then
+		c="aborted"
+	fi
+	echo "=== Check ($c) summary:"
 	for ((i=0; i<${#messages[*]}; i++)); do
 		local m="${messages[$i]}"
 		printf '%3d: %s\n' $((i+1)) "$m"
 	done
 	echo "========================================================================"
 }
-trap cleanup EXIT
 
 add_message () {
 	local m=$(echo "$@")
@@ -53,6 +62,10 @@ error () {
 
 good () {
 	add_message "GOOD: $@" >&1
+}
+
+info () {
+	add_message "INFO: $@" >&1
 }
 
 note () {
@@ -155,9 +168,11 @@ link_up () {
 }
 
 intf_ok () {
-	local intf="$1"
+	local intf="$1" addrs=''
 
 	[ -z "$intf" ] && return 1
+	addrs=$(intf_addrs "$intf")
+	[ -z "$addrs" ] && { warn "Interface '$intf' has no IP."; return 1; }
 	intf_list | grep -wq "^$intf\$" || return 1
 	intf_is_slice "$intf" && { warn "Subinterface '$intf' may NOT be used for MAAS!"; return 1; }
 	intf_up "$intf" || { warn "Interface '$intf' is DONW."; return 1; }
@@ -229,7 +244,7 @@ if [ -w /etc/passwd ]; then
 	SUDO=''
 else
 	SUDO='sudo'
-	echo "# Using '$SUDO'..." >&2
+	info "Using '$SUDO'." >&2
 	$SUDO -v
 	echo
 fi
@@ -238,21 +253,21 @@ if ! intf_ok "$eth0"; then
 	echo "# Please, select _external_ interface (type number):" >&2
 	eth0=$(intf_list_long | select_except $eth0 $eth1)
 	test -n "$eth0" || error 1 "No external interface '$eth0'."
-	intf_ok "$eth0"
+	intf_ok "$eth0" || error 1 "External interface '$eth0' is unusable."
 fi
 
 if ! intf_ok "$eth1"; then
 	echo "# Please, select _internal_ interface (type number):" >&2
 	eth1=$(intf_list_long | select_except $eth0 $eth1)
 	test -n "$eth1" || error 1 "No external interface '$eth1'."
-	intf_ok "$eth1"
+	intf_ok "$eth1" || error 1 "Internal interface '$eth1' is unusable."
 fi
 
-echo "# External link via '$eth0':"
+info "External link via '$eth0' ($(intf_addrs "$eth0"))."
 $ifconfig "$eth0" || error $? "No interface '$eth0'."
 $SUDO $ethtool "$eth0" || error $? "No link '$eth0'."
 
-echo "# Internal link via '$eth1':"
+info "Internal link via '$eth1' ($(intf_addrs "$eth1"))."
 $ifconfig "$eth1" || error $? "No link '$eth1'."
 $SUDO $ethtool "$eth1" || error $? "No link '$eth1'."
 
@@ -426,6 +441,13 @@ must_have_service maas-proxy
 $SUDO netstat -A inet -anp | grep /squid
 echo
 
+# check for some files 
+for file in /usr/share/maas/maas/urls.py; do
+	[ -f "$file" ] || error 1 "MaaS installed in a wrong way: no '$file' file."
+done
+good 'MaaS install looks ok.'
+echo
+
 if [ -n "$netcat" ]; then
 	echo
 	has_access_to -u "$ntp_host" 123 || error 1 "NTP host '$ntp_host' unreachable."
@@ -448,6 +470,7 @@ else
 fi
 echo
 
+everything_done='yes'
 echo
 [ "$all_ok" = 'yes' ]	&& echo "# Congrats! It looks like everything is fine!" \
 			|| echo "WARNING: Check your network config!" >&2
