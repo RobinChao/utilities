@@ -452,7 +452,7 @@ if [ -n "$netcat" ]; then
 	echo
 	has_access_to -u "$ntp_host" 123 || error 1 "NTP host '$ntp_host' unreachable."
 	good "NTP server '$ntp_host' looks ok."
-	has_access_to -u "pool.ntp.org" 123 && good "You may use 'pool.ntp.org' for NTP."
+	has_access_to -u "pool.ntp.org" 123 && note "You may use 'pool.ntp.org' for NTP."
 
 # TODO check for IPMI access. Figure out how to find HMC addresses...
 #	ipmi='no'
