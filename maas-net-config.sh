@@ -18,42 +18,66 @@ ntp_host='ntp.ubuntu.com'
 interfaces='/etc/network/interfaces'
 sysctl='/etc/sysctl.conf'
 
-netcat='nc'
-type -p "$netcat" >/dev/null 2>&1 || netcat=''
-
 all_ok='yes'
+declare -a messages=()
 
 tempFile=$(mktemp --tmpdir=/tmp)
 cleanup () {
 	rm -f "$tempFile"
+
+	echo "========================================================================"
+	local -i i=0
+
+	echo "=== Check summary:"
+	for ((i=0; i<${#messages[*]}; i++)); do
+		local m="${messages[$i]}"
+		printf '%3d: %s\n' $((i+1)) "$m"
+	done
+	echo "========================================================================"
 }
 trap cleanup EXIT
+
+add_message () {
+	local m=$(echo "$@")
+	messages[${#messages[*]}]="$m"
+	echo "$m"
+}
 
 error () {
 	local -i rc=$1
 	shift
 	all_ok='no'
-	echo "ERROR: $@" >&2
+	add_message "ERROR: $@" >&2
 	exit $rc
 }
 
-ip=$(type -p "ip" 2>/dev/null) || error 1 "No 'ip' (install iproute2)."
-ifconfig=$(type -p "ifconfig" 2>/dev/null) || error 1 "No 'ifconfig' (install net-tools)."
-route=$(type -p "route" 2>/dev/null) || error 1 "No 'route' (install net-tools)."
-iptables=$(type -p "iptables" 2>/dev/null) || error 1 "No 'iptables' (install iptables)."
-ethtool=$(type -p "ethtool" 2>/dev/null) || error 1 "No 'ethtool' (install ethtool)."
-
 good () {
-	echo "GOOD: $@" >&1
+	add_message "GOOD: $@" >&1
 }
 
 note () {
-	echo "NOTE: $@" >&1
+	add_message "NOTE: $@" >&1
 }
 
 warn () {
 	all_ok='no'
-	echo "WARNING: $@" >&1
+	add_message "WARNING: $@" >&1
+}
+
+where () {
+	type -p "$1" 2>/dev/null
+}
+
+netcat=$(where "nc") || netcat=''
+
+ip=$(where "ip") || error 1 "No 'ip' (install iproute2)."
+ifconfig=$(where "ifconfig") || error 1 "No 'ifconfig' (install net-tools)."
+route=$(where "route") || error 1 "No 'route' (install net-tools)."
+iptables=$(where "iptables") || error 1 "No 'iptables' (install iptables)."
+ethtool=$(where "ethtool") || error 1 "No 'ethtool' (install ethtool)."
+
+has_access_to () {
+	[ -n "$netcat" -a -x "$netcat" ] && $netcat -vzw1 "$@"
 }
 
 intf_list () {
@@ -404,15 +428,27 @@ echo
 
 if [ -n "$netcat" ]; then
 	echo
-	"$netcat" -vzuw1 "$ntp_host" 123 || error 1 "NTP host '$ntp_host' unreachable."
+	has_access_to -u "$ntp_host" 123 || error 1 "NTP host '$ntp_host' unreachable."
 	good "NTP server '$ntp_host' looks ok."
-	"$netcat" -vzuw1 "pool.ntp.org" 123 && good "You may use 'pool.ntp.org' for NTP."
-	
+	has_access_to -u "pool.ntp.org" 123 && good "You may use 'pool.ntp.org' for NTP."
+
+# TODO check for IPMI access. Figure out how to find HMC addresses...
+#	ipmi='no'
+#	for a in $(intf_addrs "$eth0") $(intf_addrs "$eth1"); do
+#		if has_access_to -u $a 623; then
+#			ipmi='yes'
+#			good "Can access IPMI on '$a'."
+#		else
+#			note "No IPMI access on '$a'."
+#		fi
+#	done
+#	[ "$ipmi" = 'no' ] && warn "No access to IPMI."
 else
-	warn "Cannot check NTP availability."
+	warn "Cannot check NTP and IPMI availability."
 fi
+echo
 
 echo
 [ "$all_ok" = 'yes' ]	&& echo "# Congrats! It looks like everything is fine!" \
-			|| warn "Check your network config!"
+			|| echo "WARNING: Check your network config!" >&2
 # EOF #
