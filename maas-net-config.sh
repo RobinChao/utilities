@@ -556,7 +556,7 @@ sysctl_hint_on_ip4fwd () {
 	cat <<-EOT >&2
 	ADVICE:
 	# Add 'net.ipv4.ip_forward=1' line to '$sysctlcfg' and apply with '$SUDO sysctl -p'
-	# or run '$SUDO sysctl net.ipv4.ip_forward=1'.
+	# or run '$SUDO sysctl -w net.ipv4.ip_forward=1'.
 EOT
 	warn "$@"
 }
@@ -578,7 +578,7 @@ fi
 if [ -n "$sysctl" ]; then
 	$sysctl net.ipv4.ip_forward \
 	| grep -Hn 'net.ipv4.ip_forward[[:space:]]*=[[:space:]]*1' \
-	|| sysctl_hint_on_ip4fwd "Run '$SUDO sysctl net.ipv4.ip_forward=1'."
+	|| sysctl_hint_on_ip4fwd "Run '$SUDO sysctl -w net.ipv4.ip_forward=1'."
 else
 	note "Cannot check IPv4 forwarding status via '$sysctl'."
 fi
