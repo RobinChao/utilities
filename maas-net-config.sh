@@ -4,8 +4,15 @@ cat >/dev/tty <<-EOT
 
 	# This scipt will check network config of a MAAS Controller node.
 	# It should be ran on a MAAS Controller Node.
+	#
+	# This is an *interactive* script!
+	#
 	# Follow the advises, if any.
-	# Run again until no advises shown.
+	# Run again until no advises/errors/warnings shown.
+	#
+	# Run as '$(basename $0) --continue' to make it to run all available tests.
+	# Otherwise it will stop on errors.
+	#
 	# The script will NOT change anything.
 
 EOT
@@ -16,7 +23,7 @@ eth1='' # 'enp12s0f2'	# internal
 ntp_host='ntp.ubuntu.com'
 
 interfaces='/etc/network/interfaces'
-sysctl='/etc/sysctl.conf'
+sysctlcfg='/etc/sysctl.conf'
 
 all_ok='yes'
 everything_done='no'
@@ -89,10 +96,12 @@ os_release () {
 		echo "# /etc/os-release:"
 		cat -nA "/etc/os-release"
 		OS_RELEASE="$(grep '^ID=' < "/etc/os-release" | cut -d= -f2- | tr -d '"')"
-		info "OS release: '$OS_RELEASE'."
+		info "OS type: '$OS_RELEASE'."
 	else
-		note "Cannot detect OS release."
+		note "Cannot detect OS type."
 	fi
+	echo >/dev/tty
+	read -p 'Type <RETURN> to continue: ' </dev/tty
 }
 
 do_help () {
@@ -125,8 +134,8 @@ done
 netcat=$(where "nc") || note "No 'netcat' facility."
 
 ip=$(where "ip") || warn "No 'ip' (install iproute2)."
-ifconfig=$(where "ifconfig") || warn "No 'ifconfig' (install net-tools)."
-route=$(where "route") || warn "No 'route' (install net-tools)."
+ifconfig=$(where "ifconfig") || note "No 'ifconfig' (install net-tools)."
+route=$(where "route") || note "No 'route' (install net-tools)."
 
 [ -z "$ip" -a -z "$ifconfig" ] && error 1 "No way to check interfaces."
 [ -z "$ip" -a -z "$route" ] && error 1 "No way to check routes."
@@ -136,8 +145,14 @@ ethtool=$(where "ethtool") || error 1 "No 'ethtool' (install ethtool)."
 
 netstat=$(where 'netstat') || note "No 'netstat' tool."
 
+sysctl=$(where 'sysctl') || warn "No 'sysctl' -- strange!"
+
 has_access_to () {
 	[ -n "$netcat" -a -x "$netcat" ] && $netcat -vzw1 "$@"
+}
+
+has_access_to_ntp () {
+	has_access_to -u "$1" 123
 }
 
 intf_list () {
@@ -287,8 +302,7 @@ must_have_service () {
 
 	[ -e "$file" ] || {
 		note "There is no service file '$file'."
-		note "This may be an unsupported distro."
-		return
+		return 1
 	}
 	$SUDO service "$service" status >"$tempFile" 2>&1 \
 		|| error 1 "You must have '$service' \"service\": $(< $tempFile)"
@@ -317,26 +331,29 @@ fi
 if ! intf_ok "$eth0"; then
 	echo "# Please, select _external_ interface (type number):" >&2
 	eth0=$(intf_list_long | select_except $eth0 $eth1)
-	test -n "$eth0" || error 1 "No external interface '$eth0'."
-	intf_ok "$eth0" || error 1 "External interface '$eth0' is unusable."
 fi
+test -n "$eth0" || error 1 "No external interface '$eth0'."
+intf_ok "$eth0" || error 1 "External interface '$eth0' is unusable."
 
 if ! intf_ok "$eth1"; then
 	echo "# Please, select _internal_ interface (type number):" >&2
 	eth1=$(intf_list_long | select_except $eth0 $eth1)
-	test -n "$eth1" || error 1 "No external interface '$eth1'."
-	intf_ok "$eth1" || error 1 "Internal interface '$eth1' is unusable."
 fi
+test -n "$eth1" || error 1 "No external interface '$eth1'."
+intf_ok "$eth1" || error 1 "Internal interface '$eth1' is unusable."
 
+echo
 info "External link via '$eth0' ($(intf_addrs "$eth0"))."
 intf_exists "$eth0" || error $? "No interface '$eth0'."
 $SUDO $ethtool "$eth0" || error $? "No link '$eth0'."
 
+echo
 info "Internal link via '$eth1' ($(intf_addrs "$eth1"))."
 intf_exists "$eth1" || error $? "No link '$eth1'."
 $SUDO $ethtool "$eth1" || error $? "No link '$eth1'."
 
-echo "# System-wide interface config ($interfaces):"
+echo
+echo "# System-wide interface config:"
 
 intf_stanza () {
 	case "$1" in
@@ -482,19 +499,27 @@ fi
 echo
 
 echo "# Local NAT config:"
-W=''
-$SUDO $iptables -S -t nat
-output_has_word "$eth0" 'NAT config' "$SUDO $iptables -S -t nat" || W='yes'
-if [ "$W" = 'yes' ]; then
-	warn "You may have troubles with external connectivity for deployed machines."
+ipt_hint_on_masquerade () {
 	cat >&2 <<-EOT
+		ADVICE:
 		# Consider adding these rules:
 		# -t nat -A POSTROUTING -o $eth0 -j MASQUERADE
 
 EOT
+}
+W=''
+$SUDO $iptables -S -t nat
+output_has_word "$eth0" 'NAT config' "$SUDO $iptables -S -t nat" || W='yes'
+if [ "$W" = 'yes' ]; then
+	ipt_hint_on_masquerade
+	warn "You may have troubles with external connectivity for deployed machines."
 fi
-$SUDO $iptables -t nat -S POSTROUTING | grep -qw MASQUERADE \
-	|| error 1 "No MASQUERADE rule in POSTROUTING chain (table 'nat')."
+if $SUDO $iptables -t nat -S POSTROUTING | grep -qw MASQUERADE; then
+	: ok
+else
+	ipt_hint_on_masquerade
+	error 1 "No MASQUERADE rule in POSTROUTING chain (table 'nat')."
+fi
 echo
 
 echo "# Kernel support for NAT:"
@@ -505,49 +530,96 @@ lsmod | grep nat_ && good "NAT modules loaded." || warn "No NAT kernel modules l
 echo
 
 echo "# Local forwarding policy:"
+ipt_hint_on_forwarding () {
+	cat >&2 <<-EOT
+		ADVICE:
+		# Consider adding these rules:
+		# -A FORWARD -i $eth0 -o $eth1 -m state --state RELATED,ESTABLISHED -j ACCEPT
+		# -A FORWARD -i $eth1 -o $eth0 -j ACCEPT
+EOT
+}
 W=''
 $SUDO $iptables -S FORWARD
 output_has_word "$eth0" 'routing' "$SUDO $iptables -S FORWARD" || W='yes'
 output_has_word "$eth1" 'routing' "$SUDO $iptables -S FORWARD" || W='yes'
 if [ "$W" = 'yes' ]; then
 	warn "You may not have external connectivity for deployed machines."
-	cat >&2 <<-EOT
-		# Consider adding these rules:
-		# -A FORWARD -i $eth0 -o $eth1 -m state --state RELATED,ESTABLISHED -j ACCEPT
-		# -A FORWARD -i $eth1 -o $eth0 -j ACCEPT
-EOT
+	ipt_hint_on_forwarding
 else	good "Local forwarding looks set up."
 fi
 echo
 
-grep -Hn 'net.ipv4.ip_forward[[:space:]]*=[[:space:]]*1' "$sysctl" \
-	|| error 1 "You must add 'net.ipv4.ip_forward=1' to '$sysctl'."
-grep -q '#[[:space:]]*net.ipv4.ip_forward[[:space:]]*=[[:space:]]*1' "$sysctl" \
-	&& error 1 "You must uncomment the line and reload with '$SUDO sysctl -p'."
+echo "# Local IPv4 forwarding enablement:"
+W=''
+sysctl_hint_on_ip4fwd () {
+	W='yes'
+	cat <<-EOT >&2
+	ADVICE:
+	# Add 'net.ipv4.ip_forward=1' line to '$sysctlcfg' and apply with '$SUDO sysctl -p'
+	# or run '$SUDO sysctl net.ipv4.ip_forward=1'.
+EOT
+	warn "$@"
+}
+ip4fwd=''
+sysfs_ip4fwd=''
+if [ -e '/sys/net/ipv4/ip_forward' ]; then
+	sysfs_ip4fwd='/sys/net/ipv4/ip_forward'
+	ip4fwd=$(< /sys/net/ipv4/ip_forward)
+elif [ -e '/proc/sys/net/ipv4/ip_forward' ]; then
+	sysfs_ip4fwd='/proc/sys/net/ipv4/ip_forward'
+	ip4fwd=$(< /proc/sys/net/ipv4/ip_forward)
+fi
+if [ -n "$ip4fwd" ]; then
+	[ "$ip4fwd" = '1' ] && good 'IPv4 forwarding enabled.' \
+		|| warn "IPv4 forwarding disabled (do 'echo 1 >$sysfs_ip4fwd' to enable)."
+else
+	note 'Cannot verify IPv4 forwarding status in sysfs.'
+fi
+if [ -n "$sysctl" ]; then
+	$sysctl net.ipv4.ip_forward \
+	| grep -Hn 'net.ipv4.ip_forward[[:space:]]*=[[:space:]]*1' \
+	|| sysctl_hint_on_ip4fwd "Run '$SUDO sysctl net.ipv4.ip_forward=1'."
+else
+	note "Cannot check IPv4 forwarding status via '$sysctl'."
+fi
+grep -Hn 'net.ipv4.ip_forward[[:space:]]*=[[:space:]]*1' "$sysctlcfg" \
+	|| sysctl_hint_on_ip4fwd "You must add 'net.ipv4.ip_forward=1' to '$sysctlcfg'."
+grep -q '#[[:space:]]*net.ipv4.ip_forward[[:space:]]*=[[:space:]]*1' "$sysctlcfg" \
+	&& sysctl_hint_on_ip4fwd "You must uncomment the line and reload with '$SUDO sysctl -p'."
+[ -n "$W" ] && error 1 "Fix IPv4 forwarding."
+echo
 
 cut -d\# -f1 /etc/resolv.conf | grep -qw '^nameserver' \
 	|| error 1 "No nameserver configured. Run \`echo nameserver 8.8.8.8|resolvconf -a '$eth0'\`."
 
-must_have_service maas-rackd
-must_have_service maas-clusterd
-must_have_service maas-regiond
-must_have_service maas-dhcpd
-must_have_service maas-proxy
+W=''
+must_have_service maas-rackd || W='yes'
+must_have_service maas-clusterd || W='yes'
+must_have_service maas-regiond || W='yes'
+must_have_service maas-dhcpd || W='yes'
+must_have_service maas-proxy || W='yes'
 [ -n "$netsat" ] && { $SUDO $netstat -A inet -anp | grep /squid; }
+[ -n "$W" ] && note "This may be an unsupported distro."
 echo
 
 # check for some files 
+W=''
 for file in /usr/share/maas/maas/urls.py; do
-	[ -f "$file" ] || error 1 "MaaS installed in a wrong way: no '$file' file."
+	if [ -f "$file" ]; then
+		: ok
+	else
+		W=yes
+		error 1 "MaaS installed, if any, in a wrong way: no '$file' file."
+	fi
 done
-good 'MaaS install looks ok.'
+[ -z "$W" ] && good 'MaaS install looks ok.'
 echo
 
 if [ -n "$netcat" ]; then
 	echo
-	has_access_to -u "$ntp_host" 123 || error 1 "NTP host '$ntp_host' unreachable."
+	has_access_to_ntp "$ntp_host" || error 1 "NTP host '$ntp_host' unreachable."
 	good "NTP server '$ntp_host' looks ok."
-	has_access_to -u "pool.ntp.org" 123 && note "You may use 'pool.ntp.org' for NTP."
+	has_access_to_ntp "pool.ntp.org" && note "You may use 'pool.ntp.org' for NTP."
 
 # TODO check for IPMI access. Figure out how to find HMC addresses...
 #	ipmi='no'
@@ -561,7 +633,7 @@ if [ -n "$netcat" ]; then
 #	done
 #	[ "$ipmi" = 'no' ] && warn "No access to IPMI."
 else
-	warn "Cannot check NTP and IPMI availability."
+	note "Cannot check NTP and IPMI availability (no 'netcat')."
 fi
 echo
 
