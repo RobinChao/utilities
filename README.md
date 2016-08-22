@@ -6,4 +6,4 @@
 * `maas-rc-local.sh` -- a plug for /etc/rc.local to setup MAAS Controller node
 * `certgen.py` -- generate certs for RH OpenStack installer **`undercloud`**
   * When you're digging through the [manual](https://access.redhat.com/documentation/en/red-hat-openstack-platform/8/paged/director-installation-and-usage/appendix-a-ssl-tls-certificate-configuration), you ~~may~~ _will_ face a problem generating suitable certificates and [this small Python code](certgen.py) is your friend.
-Take a look at it and edit settings near the top of the file to reflect your configuration: even if you aren't changing UnderCloud's defaults, you'll probably state your vision of life in `req_distinguished_name` section.
+Take a look at it and edit [settings near the top of the file](certgen.py#L10) to reflect your configuration: even if you aren't changing UnderCloud's defaults, you'll probably state your vision of life in `req_distinguished_name` [section](certgen.py#L34).
