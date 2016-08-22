@@ -3,34 +3,35 @@
 import sys, os, getopt, subprocess
 import socket, fcntl, struct
 
-import logging ; logging.root.setLevel(logging.INFO)
+import logging ; logging.root.setLevel(logging.INFO) # s/INFO/DEBUG/ if you feel courious
 
 # import ConfigParser, io # no way! openssl.cfg is NOT a valid INI file :(
 # cf = ConfigParser.RawConfigParser()
 
-sysconfig = '/etc/pki/tls/openssl.cnf'
-anchors = '/etc/pki/ca-trust/source/anchors'
-opensslcnf = ''
+sysconfig = '/etc/pki/tls/openssl.cnf'	# where "template" lives
+anchors = '/etc/pki/ca-trust/source/anchors' # where that template wants to install
+opensslcnf = '' # local copy
 
-uc_conf_tpl = '/usr/share/instack-undercloud/undercloud.conf.sample'
-uc_conf_lcl = 'undercloud.conf'
+uc_conf_tpl = '/usr/share/instack-undercloud/undercloud.conf.sample' # template
+uc_conf_lcl = 'undercloud.conf' # local one
 
 values = {
-	'public_api_ip': '192.0.2.2',
+	'public_api_ip': '192.0.2.2', # default, good enough
 }
 
-default_IP_addresses = [
+default_IP_addresses = [# defaults, don't change in case of any doubts
 	'192.0.2.1',	#network_gateway
 	'192.0.2.2',	#undercloud_public_vip
 	'192.0.2.3',	#undercloud_admin_vip
 	'192.0.2.4',	# reserved
 ]
 
-default_host_names = [
+default_host_names = [	# good as they are
 	'undercloud_public_vip',
 	'undercloud_admin_vip',
 ]
 
+# you may want to change these lines:
 req_distinguished_name = '''[req_distinguished_name]
 countryName = Neverland
 countryName_default = SU
@@ -46,12 +47,18 @@ commonName_max = 64
 organizationName = The TesterZ
 organizationName_default = z
 '''
+
+# don't change if you aren't pretty sure what you're doing
 v3_req = '''[v3_req]
 # Extensions to add to a certificate request
 basicConstraints = CA:FALSE
 keyUsage = nonRepudiation, digitalSignature, keyEncipherment
 subjectAltName = @alt_names
 '''
+
+#-----------------------------------------------------------------------
+# The code starts here
+#
 
 class ConfigParser:
 	'''Extremly relaxed parser of ini files.
@@ -371,11 +378,16 @@ def make_config():
 	global opensslcnf
 
 	logging.info('Making config')
+
 	cfg = os.path.basename(sysconfig)
-	copy(sysconfig, cfg)
+	copy(sysconfig, cfg) # copy from template to local
+
+	# disable these sections, if any
 	comment_out(cfg, 'req_distinguished_name')
 	comment_out(cfg, 'v3_req')
 	comment_out(cfg, 'alt_names')
+
+	# add our own versions for them
 	append_text(cfg, req_distinguished_name % values)
 	append_text(cfg, v3_req % values)
 
@@ -406,34 +418,40 @@ def make_config():
 	
 	append_text(cfg, '\n'.join(alt_names) + '\n\n# EOF #\n')
 
-	cf.read(cfg)
+	cf.read(cfg) # load the config built
 
-	ca_sec = cf.get('ca', 'default_ca')
-	values['ca_sec'] = ca_sec
+	values['ca_sec'] = ca_sec = cf.get('ca', 'default_ca')
 	logging.debug('ca.default_ca=%s', `ca_sec`)
 
 	opensslcnf = cfg
 
+def check_undercloud_config():
+	exists('undercloud.conf') # this one is built by your hands
+	ucf.read('undercloud.conf') # load it
 
-def check():
-	'''Perform some preliminary checks.
-	'''
-	exists(sysconfig)
-	exists('undercloud.conf')
+	# there are three things you'll probably change in 'undercloud.conf':
+	# 1. undercloud_service_certificate=	where to put your cert
+	# 2. image_path=			where to store images
+	# 3. local_interface=			where to serve API on
+	# because there is no AI to guess them right.
 
-	ucf.read('undercloud.conf')
 	srv_cert = ucf.get('DEFAULT', 'undercloud_service_certificate')
 	logging.info('%s:undercloud_service_certificate=%s', ucf._filename, `srv_cert`)
-	exists(os.path.dirname(srv_cert))
+	exists(os.path.dirname(srv_cert))	# you have to 'sudo mkdir' it first.
 
 	image_path = ucf.get('DEFAULT', 'image_path')
 	logging.info('%s:image_path=%s', ucf._filename, `image_path`)
-	mkpath(image_path)
+	mkpath(image_path) # this is supposed to be in stack's home - no sudo
 
 	local_interface = ucf.get('DEFAULT', 'local_interface')
 	if not interface_enabled(os.path.join('/sys/class/net', local_interface)):
 		error(1, "Local interface '%s' is not enabled", local_interface)
 
+def check():
+	'''Perform some preliminary checks.
+	'''
+	exists(sysconfig)
+	check_undercloud_config()
 
 def root_touch(fname, data=''):
 	'''Create an empty file (as root).
@@ -459,17 +477,19 @@ def fix_etc_files():
 	logging.debug('%s.serial=%s', `ca_sec`, `srl`)
 	root_rm(srl)
 	root_rm(srl+'.old')
-	root_touch(srl, '01\n') # reset serial
+	root_touch(srl, '01\n') # reset serial, this is a "hex" value!
 
 
 def fix_ca_install():
 	'''Polish out some misconceptions between RH's TFM and the observed nature.
 	This includes indstallation of a cert copy to the path specified in config
 	*along with* path given in the TFM ('private_key') as well as creation of
-	some files where OpenSSL will expect to see them.
+	some files where OpenSSL will expect to see them (see fix_etc_files too).
 	'''
 	logging.info('Fixing CA install...')
 	ca_sec = values['ca_sec']
+
+	created('ca.key.pem')	# pre-condition
 
 	private_key = cf.get(ca_sec, 'private_key') # $dir/private/cakey.pem
 	logging.debug('%s.private_key=%s', `ca_sec`, `private_key`)
@@ -481,6 +501,10 @@ def gen_certs():
 	'''Generate certificates for the server.
 	'''
 	logging.info('Generating certs...')
+
+	rm('server.key.pem')
+	rm('server.csr.pem')
+	rm('server.crt.pem')
 
 	openssl('genrsa', '-out', 'server.key.pem', '2048')
 	created('server.key.pem')
@@ -498,7 +522,15 @@ def install_certs():
 	'''Install generated certificates for the server.
 	'''
 	logging.info('Installing certs...')
+
+	created('ca.crt.pem')		# pre-conditions
+	created('server.crt.pem')
+	created('server.key.pem')
+
+	# yes, two certs into a single file
 	save('undercloud.pem', load('server.crt.pem') + load('server.key.pem'))
+	created('undercloud.pem')
+
 	root_mkpath('/etc/pki/instack-certs')
 	root_install('undercloud.pem', '/etc/pki/instack-certs/.')
 	sudo('semanage', 'fcontext', '-a', '-t', 'etc_t', '"/etc/pki/instack-certs(/.*)?"')
@@ -541,6 +573,8 @@ def main():
 	install_certs()
 
 	logging.info("You're lucky enough to get it done now.")
+
+	print("\n\nNow you have to [re]run the 'openstack undercloud install' command!\n\n")
 	return 0
 
 if __name__ == '__main__':
