@@ -1,6 +1,6 @@
 #!/usr/bin/python2.7
 
-import sys, os, getopt, subprocess
+import sys, os, getopt, subprocess, time
 import socket, fcntl, struct
 
 import logging ; logging.root.setLevel(logging.INFO) # s/INFO/DEBUG/ if you feel courious
@@ -59,6 +59,14 @@ subjectAltName = @alt_names
 #-----------------------------------------------------------------------
 # The code starts here
 #
+
+
+class Global:
+	SE_level = None
+	use_pause = False
+#end class Global
+
+G = Global()
 
 class ConfigParser:
 	'''Extremly relaxed parser of ini files.
@@ -145,6 +153,7 @@ def output(*av, **kw):
 	# kw['stderr'] = subprocess.STDOUT
 	args = [] # one may use ['/bin/sh','-c',' '.join(av) + ';exit 0'] here...
 	args += av
+	logging.debug('Command [%s] captured', ' '.join(av))
 	return apply(subprocess.check_output, (args,), kw)
 
 def sudo(*av, **kw):
@@ -166,6 +175,19 @@ def root_openssl(*av, **kw):
 	'''
 	kw['msg'] = kw.get('msg', 'Command failed (sudo openssl) [%s]')
 	apply(run, ('sudo', 'openssl',) + av, kw)
+
+def SE_getenforce():
+	'''Get SELinux enforcement setting.
+	'''
+	return output('sudo', 'getenforce').strip() == 'Enforcing'
+
+def SE_setenforce(value=True):
+	'''Set SELinux enforcement setting.
+	'''
+	logging.debug('SE_setenforce(%s)', `value`)
+	if value is None :
+		return
+	sudo('setenforce', value and '1' or '0')
 
 def exists(name):
 	'''Assert existence of a file system object.
@@ -234,6 +256,10 @@ def root_install(fname, path):
 		path += '/'
 	sudo('cp', '-v', fname, path)
 
+def pause(prompt=''):
+	if G.use_pause:
+		r = raw_input(prompt and prompt+': ' or '')
+
 def gen_ca():
 	'''Generate certificates for an "authority".
 	'''
@@ -254,6 +280,8 @@ def gen_ca():
 		'-extensions','v3_ca',
 		'-out','ca.crt.pem')
 	created('ca.crt.pem')
+
+	pause('CA certs have been generated')
 
 def root_mkpath(path):
 	'''Create directory and all the path to it as root.
@@ -279,6 +307,8 @@ def install_ca():
 	root_mkpath(anchors)
 	root_install('ca.crt.pem', anchors)
 	sudo('update-ca-trust', 'extract')
+
+	pause('CA certs have been installed')
 
 def comment_out(fname, section, mark='opnstk'):
 	'''Comment out a section of an INI-type file
@@ -425,6 +455,8 @@ def make_config():
 
 	opensslcnf = cfg
 
+	pause('OpenSSL config "%s" has been created' % (cfg,))
+
 def check_undercloud_config():
 	exists('undercloud.conf') # this one is built by your hands
 	ucf.read('undercloud.conf') # load it
@@ -444,6 +476,7 @@ def check_undercloud_config():
 	mkpath(image_path) # this is supposed to be in stack's home - no sudo
 
 	local_interface = ucf.get('DEFAULT', 'local_interface')
+	logging.info('%s:local_interface=%s', ucf._filename, `local_interface`)
 	if not interface_enabled(os.path.join('/sys/class/net', local_interface)):
 		error(1, "Local interface '%s' is not enabled", local_interface)
 
@@ -452,6 +485,7 @@ def check():
 	'''
 	exists(sysconfig)
 	check_undercloud_config()
+	pause('Common check has been passed')
 
 def root_touch(fname, data=''):
 	'''Create an empty file (as root).
@@ -479,6 +513,7 @@ def fix_etc_files():
 	root_rm(srl+'.old')
 	root_touch(srl, '01\n') # reset serial, this is a "hex" value!
 
+	pause('/etc/ files have been fixed')
 
 def fix_ca_install():
 	'''Polish out some misconceptions between RH's TFM and the observed nature.
@@ -496,6 +531,8 @@ def fix_ca_install():
 	pk_dir = os.path.dirname(private_key)
 	root_mkpath(pk_dir)
 	root_install('ca.key.pem', private_key)
+
+	pause('CA cert install have been fixed')
 
 def gen_certs():
 	'''Generate certificates for the server.
@@ -518,6 +555,8 @@ def gen_certs():
 		'-out', 'server.crt.pem', '-cert', 'ca.crt.pem')
 	created('server.crt.pem')
 
+	pause('Server certs have been generated')
+
 def install_certs():
 	'''Install generated certificates for the server.
 	'''
@@ -539,19 +578,50 @@ def install_certs():
 	root_install('ca.crt.pem', anchors)
 	sudo('update-ca-trust', 'extract')
 
+	pause('Server certs have been installed')
+
+def can_connect(addr, port):
+	try:
+		socket.create_connection((addr, port)).close()
+		logging.debug('can_connect(%s, %s): True', `addr`, `port`)
+		return True
+	except:
+		logging.debug('can_connect(%s, %s): False', `addr`, `port`)
+		return False
+
+def fetch(url):
+	'''Try to fetch an URL via HTTPS with display of handhsking.
+	'''
+	logging.debug('fetch(%s) using curl', `url`)
+	rc = subprocess.call(('curl', '-v', url)) # move to urllib2.urlopen() ??
+	return rc == 0
+
+def setup():
+	G.SE_level = SE_getenforce()
+
+def cleanup():
+	logging.debug('CLEANUP start')
+	SE_setenforce(G.SE_level)
+	logging.debug('CLEANUP end')
+
 def main():
 	'''Just do the job.
 	'''
 	try:
 		opts, args = getopt.getopt(
 			sys.argv[1:],
-			'?h',
-			('help',)
+			'?hpd',
+			('help', 'pause', 'debug')
 		)
 		for o,v in opts:
 			if o in ('-h', '--help'):
-				print('HELP!')
+				print('-p, --pause -- stop after each step')
+				print('-d, --debug -- use DEBUG level of logging')
 				return 0
+			elif o in ('-p', '--pause'):
+				G.use_pause = True
+			elif o in ('-d', '--debug'):
+				logging.root.setLevel(logging.DEBUG)
 	except getopt.error, why:
 		print(why)
 	else:
@@ -559,22 +629,47 @@ def main():
 	for arg in args:
 		pass
 
-	check()
-	make_config()
+	setup()
+	try:
+		check()
+		make_config()
 
-	fix_etc_files()
+		fix_etc_files()
 
-	gen_ca()
-	install_ca()
+		gen_ca()
+		install_ca()
 
-	fix_ca_install()
+		fix_ca_install()
 
-	gen_certs()
-	install_certs()
+		gen_certs()
+		install_certs()
 
-	logging.info("You're lucky enough to get it done now.")
+		if can_connect(values['public_api_ip'], 13000):
+			url = 'https://%(public_api_ip)s:13000/v3/auth/tokens' % values
+			if not fetch(url):
+				logging.warn('Will try haproxy restart')
+				sudo('service', 'haproxy', 'restart')
+				time.sleep(3)
+				if not fetch(url):
+					error(1, "Something went wrong with certs.")
+		else:
+			logging.warn('No listener at %s', '%(public_api_ip)s:13000' % values)
+			run('service', 'haproxy', 'status')
 
-	print("\n\nNow you have to [re]run the 'openstack undercloud install' command!\n\n")
+		logging.info("You're lucky enough to get it done now.")
+	finally:
+		cleanup()
+
+	print("""
+
+Now you have to [re]run the 'openstack undercloud install' command!
+
+Should the things go wrong, check'wm up with
+	curl -v https://%(public_api_ip)s:13000/v3/auth/tokens
+and then try to fix with
+	service haproxy restart
+
+""" % values)
 	return 0
 
 if __name__ == '__main__':
