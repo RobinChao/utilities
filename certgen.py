@@ -2,7 +2,8 @@
 
 import sys, os, getopt, subprocess
 import socket, fcntl, struct
-import logging ; logging.root.setLevel(20)
+
+import logging ; logging.root.setLevel(logging.INFO)
 
 # import ConfigParser, io # no way! openssl.cfg is NOT a valid INI file :(
 # cf = ConfigParser.RawConfigParser()
