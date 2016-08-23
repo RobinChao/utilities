@@ -365,9 +365,14 @@ def list_interfaces(check_enabled=False):
 	os.path.walk('/sys/class/net', sys_class_net_walker, check_enabled)
 	return _interfaces[:]
 
+def bytes23(string):
+	if sys.version_info.major > 2 :
+		return bytes(string, 'utf-8')
+	return bytes(string)
+
 def _intf2ip(intf):
 	SIOCGIFADDR = 0x8915
-	ifname = struct.pack('256s', intf[:15])
+	ifname = struct.pack('256s', bytes23(intf[:15]))
 	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 	d = fcntl.ioctl(s.fileno(), SIOCGIFADDR, ifname) # Cannot assign requested address :(
 	return socket.inet_ntoa(d[20:24])
