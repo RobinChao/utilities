@@ -147,8 +147,13 @@ netstat=$(where 'netstat') || note "No 'netstat' tool."
 
 sysctl=$(where 'sysctl') || warn "No 'sysctl' -- strange!"
 
+case "$OS_RELEASE" in
+ubuntu)	netcat_opt='-vzw1';;
+rhel)	netcat_opt='-vw1';;
+*)	netcat_opt='-vw1';;
+esac
 has_access_to () {
-	[ -n "$netcat" -a -x "$netcat" ] && $netcat -vzw1 "$@"
+	[ -n "$netcat" -a -x "$netcat" ] && $netcat $netcat_opt "$@"
 }
 
 has_access_to_ntp () {
