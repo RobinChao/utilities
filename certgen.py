@@ -372,9 +372,9 @@ def bytes23(string):
 
 def _intf2ip(intf):
 	SIOCGIFADDR = 0x8915
-	ifname = struct.pack('256s', bytes23(intf[:15]))
+	req = struct.pack('16sH14s', bytes23(intf[:15]), socket.AF_INET, b'\x00'*14)
 	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-	d = fcntl.ioctl(s.fileno(), SIOCGIFADDR, ifname) # Cannot assign requested address :(
+	d = fcntl.ioctl(s.fileno(), SIOCGIFADDR, req) # Cannot assign requested address :(
 	return socket.inet_ntoa(d[20:24])
 
 def intf2ip(intf):
@@ -384,7 +384,8 @@ def intf2ip(intf):
 
 def list_host_addresses():
 	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-	s.connect(('10.255.255.255', 5353)) # never mind!
+	s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+	s.connect(('<broadcast>', 0))
 	ip = s.getsockname()[0] # at least one IP I'll grab here
 	s.close()
 	
