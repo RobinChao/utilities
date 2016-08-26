@@ -148,7 +148,7 @@ int query_if_list(int size)
 
 		printf("%2d: ", i + 1);
 		printf(ifnamefmt, ifr->ifr_name);
-		printf(": %-20s", ipv4addr(&ifr->ifr_addr));
+		printf(": %-15s", ipv4addr(&ifr->ifr_addr));
 
 		if (query_if_hwaddr(ifr))
 			printf("<no-hw-addr>");
