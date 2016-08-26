@@ -117,12 +117,12 @@ static inline char *hw_addr(const struct sockaddr *sa)
 	return mac;
 }
 
-int query_if_list(int size)
+int query_if_list(void)
 {
 	struct ifreq *req = NULL;
 	struct ifconf ifc = {};
 	char ifnamefmt[16];
-	int rc, i, j;
+	int rc, i, j, size = query_response_size();
 
 	if (size <= 0) return -1;
 
@@ -143,7 +143,6 @@ int query_if_list(int size)
 
 	sprintf(ifnamefmt, "%%-%d.%ds", IFNAMSIZ, IFNAMSIZ);
 	for (i = 0; i < ifc.ifc_len / sizeof(struct ifreq); i++) {
-		struct sockaddr mac;
 		struct ifreq *ifr = &ifc.ifc_req[i];
 
 		printf("%2d: ", i + 1);
@@ -151,7 +150,7 @@ int query_if_list(int size)
 		printf(": %-15s", ipv4addr(&ifr->ifr_addr));
 
 		if (query_if_hwaddr(ifr))
-			printf("<no-hw-addr>");
+			printf("<error> <no-hw-addr>");
 		else {
 			printf(": %s", hw_addr(&ifr->ifr_addr));
 		}
@@ -164,7 +163,7 @@ int query_if_list(int size)
 
 int main(int argc, const char **argv)
 {
- 	if (query_if_list(query_response_size()))
+ 	if (query_if_list())
 		return 1;
 
 	return 0;
