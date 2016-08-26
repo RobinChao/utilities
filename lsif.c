@@ -76,7 +76,8 @@ static inline char *ipv4addr(const struct sockaddr *sa)
 
 static inline char *hw_addr(const struct sockaddr *sa)
 {
-	static char *p, mac[64] = {}; /* ETHER aa:bb:cc:dd:ee:ff */
+	static char *p, mac[64]; /* ETHER aa:bb:cc:dd:ee:ff */
+	int i;
 
 	switch (sa->sa_family) {
 	case ARPHRD_LOOPBACK:
@@ -88,8 +89,11 @@ static inline char *hw_addr(const struct sockaddr *sa)
 			(uint8_t) sa->sa_data[2], (uint8_t) sa->sa_data[3],
 			(uint8_t) sa->sa_data[4], (uint8_t) sa->sa_data[5]);
 		break;
-	deafult:
-		sprintf(mac, "<unknown#%d>", sa->sa_family);
+	default:
+		sprintf(mac, "<%d> <", sa->sa_family);
+		for (i = 0, p = mac + strlen(mac); i < sizeof(sa->sa_data); i++)
+			sprintf(p + i * 3, "%02x%s", (uint8_t) sa->sa_data[i],
+				(i < sizeof(sa->sa_data) - 1) ? ":" : ">");
 		break;
 	}
 
