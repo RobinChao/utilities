@@ -71,7 +71,24 @@ int query_if_hwaddr(struct ifreq *req)
 
 static inline char *ipv4addr(const struct sockaddr *sa)
 {
-	return inet_ntoa(*(struct in_addr *)&sa->sa_data[2]);
+	static char addr[64], *p;
+	int i;
+
+	switch (sa->sa_family) {
+	case AF_INET:
+		// sprintf(addr, "INET %-15.15s", 
+		sprintf(addr, "%-15.15s", 
+			inet_ntoa(*(struct in_addr *)&sa->sa_data[2]));
+		break;
+	default:
+		sprintf(addr, "<%d/", sa->sa_family);
+		for (i = 0, p = addr + strlen(addr); i < sizeof(sa->sa_data); i++)
+			sprintf(p + i * 3, "%02x%s", (uint8_t) sa->sa_data[i],
+				(i < sizeof(sa->sa_data) - 1) ? ":" : ">");
+		break;
+	}
+	return addr;
+	// return inet_ntoa(*(struct in_addr *)&sa->sa_data[2]);
 }
 
 static inline char *hw_addr(const struct sockaddr *sa)
@@ -131,7 +148,7 @@ int query_if_list(int size)
 
 		printf("%2d: ", i + 1);
 		printf(ifnamefmt, ifr->ifr_name);
-		printf(": %-15.15s", ipv4addr(&ifr->ifr_addr));
+		printf(": %-20s", ipv4addr(&ifr->ifr_addr));
 
 		if (query_if_hwaddr(ifr))
 			printf("<no-hw-addr>");
