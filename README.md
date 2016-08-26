@@ -9,3 +9,5 @@
 Take a look at it and edit [settings near the top of the file](certgen.py#L10) to reflect your configuration: even if you aren't changing UnderCloud's defaults, you'll probably state your vision of life in `req_distinguished_name` [section](certgen.py#L34).
 * `iflist.py` -- a way to find (1) network interfaces and (2) their respective IP addresses, if any.
 * `track-dhcp.sh` -- call `tcpdump` to see DHCP/BOOTP traffic.
+* `lsif.c` -- For those who have pissed off awking output of ip(8)...
+

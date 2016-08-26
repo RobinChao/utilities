@@ -1,3 +1,15 @@
+/* Copyright Yadro (C) 2016
+ * Author: ed@ngslab.ru
+ *
+ * For those who have pissed off awking output of ip(8)...
+ *
+ * [root@opt-03 ~]# ./lsif 
+ *  1: lo              : 127.0.0.1      : LOOPBACK -
+ *  2: eno1            : 172.17.32.102  : ETHER 6c:ae:8b:2c:eb:18
+ *  3: br-ctlplane     : 192.0.2.1      : ETHER 6c:ae:8b:2c:eb:19
+ *  4: br-ctlplane     : 192.0.2.3      : ETHER 6c:ae:8b:2c:eb:19
+ *  5: br-ctlplane     : 192.0.2.2      : ETHER 6c:ae:8b:2c:eb:19
+ */
 #include <unistd.h>
 #include <stdio.h>
 #include <errno.h>
