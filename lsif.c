@@ -15,6 +15,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <linux/types.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -23,6 +24,21 @@
 #include <net/if.h>
 #include <arpa/inet.h>
 #include <net/if_arp.h>
+
+/* legacy mode decls */
+extern int getopt(int argc, char * const argv[], const char *optstring);
+extern char *optarg;
+extern int optind, opterr, optopt;
+
+/* bool type is not a default feature in C */
+typedef enum { false = 0, true = 1 } bool;
+
+static struct {
+	bool ifname_set;
+	char ifname[IFNAMSIZ+1];
+	bool show_ip;
+	bool show_mac;
+} global = {};
 
 int run_ioctl(int opcode, void *arg)
 {
@@ -69,16 +85,24 @@ int query_if_hwaddr(struct ifreq *req)
 	return 0;
 }
 
-static inline char *ipv4addr(const struct sockaddr *sa)
+enum addr_fmt {
+	ADDR_FMT_LONG,
+	ADDR_FMT_SHORT,
+};
+
+static inline char *ipv4addr(const struct sockaddr *sa, enum addr_fmt fmt)
 {
-	static char addr[64], *p;
+	static char addr[64], *p, *fmx;
 	int i;
 
 	switch (sa->sa_family) {
 	case AF_INET:
+		switch (fmt) {
+		case ADDR_FMT_LONG:	fmx = "%-15.15s"; break;
+		case ADDR_FMT_SHORT:	fmx = "%s"; break;
+		}
 		// sprintf(addr, "INET %-15.15s", 
-		sprintf(addr, "%-15.15s", 
-			inet_ntoa(*(struct in_addr *)&sa->sa_data[2]));
+		sprintf(addr, fmx, inet_ntoa(*(struct in_addr *)&sa->sa_data[2]));
 		break;
 	default:
 		sprintf(addr, "<%d/", sa->sa_family);
@@ -88,26 +112,40 @@ static inline char *ipv4addr(const struct sockaddr *sa)
 		break;
 	}
 	return addr;
-	// return inet_ntoa(*(struct in_addr *)&sa->sa_data[2]);
 }
 
-static inline char *hw_addr(const struct sockaddr *sa)
+static inline char *hw_addr(const struct sockaddr *sa, enum addr_fmt fmt)
 {
-	static char *p, mac[64]; /* ETHER aa:bb:cc:dd:ee:ff */
+	static char *p, *fmx, mac[64]; /* ETHER aa:bb:cc:dd:ee:ff */
 	int i;
 
 	switch (sa->sa_family) {
 	case ARPHRD_LOOPBACK:
-		sprintf(mac, "LOOPBACK -");
+		switch (fmt) {
+		case ADDR_FMT_LONG:	fmx = "LOOPBACK -"; break;
+		case ADDR_FMT_SHORT:	fmx = "-"; break;
+		}
+		strcpy(mac, fmx);
 		break;
 	case ARPHRD_ETHER:
-		sprintf(mac, "ETHER %02x:%02x:%02x:%02x:%02x:%02x",
+		switch (fmt) {
+		case ADDR_FMT_LONG:	fmx = "ETHER %02x:%02x:%02x:%02x:%02x:%02x"; break;
+		case ADDR_FMT_SHORT:	fmx = "%02x:%02x:%02x:%02x:%02x:%02x"; break;
+		}
+		sprintf(mac, fmx,
 			(uint8_t) sa->sa_data[0], (uint8_t) sa->sa_data[1],
 			(uint8_t) sa->sa_data[2], (uint8_t) sa->sa_data[3],
 			(uint8_t) sa->sa_data[4], (uint8_t) sa->sa_data[5]);
 		break;
 	default:
-		sprintf(mac, "<%d> <", sa->sa_family);
+		switch (fmt) {
+		case ADDR_FMT_LONG:
+			sprintf(mac, "<%d> <", sa->sa_family);
+			break;
+		case ADDR_FMT_SHORT:
+			strcpy(mac, "<");
+			break;
+		}
 		for (i = 0, p = mac + strlen(mac); i < sizeof(sa->sa_data); i++)
 			sprintf(p + i * 3, "%02x%s", (uint8_t) sa->sa_data[i],
 				(i < sizeof(sa->sa_data) - 1) ? ":" : ">");
@@ -145,26 +183,105 @@ int query_if_list(void)
 	for (i = 0; i < ifc.ifc_len / sizeof(struct ifreq); i++) {
 		struct ifreq *ifr = &ifc.ifc_req[i];
 
-		printf("%2d: ", i + 1);
-		printf(ifnamefmt, ifr->ifr_name);
-		printf(": %-15s", ipv4addr(&ifr->ifr_addr));
+		if (global.ifname_set) {
+			if (strncmp(ifr->ifr_name, global.ifname, IFNAMSIZ))
+				continue;
 
-		if (query_if_hwaddr(ifr))
-			printf("<error> <no-hw-addr>");
-		else {
-			printf(": %s", hw_addr(&ifr->ifr_addr));
+			if (global.show_ip || !global.show_mac)
+				printf("%s%s", ipv4addr(&ifr->ifr_addr, ADDR_FMT_SHORT),
+					global.show_ip ? "" : "\t");
+			if (global.show_mac || !global.show_ip)
+				printf("%s", query_if_hwaddr(ifr)
+					? "<no-hw-addr>"
+					: hw_addr(&ifr->ifr_addr, ADDR_FMT_SHORT));
+			putchar('\n');
+		} else {
+			printf("%2d: ", i + 1);
+			printf(ifnamefmt, ifr->ifr_name);
+			printf(": %-15s", ipv4addr(&ifr->ifr_addr, ADDR_FMT_LONG));
+
+			if (query_if_hwaddr(ifr))
+				printf("<error> <no-hw-addr>");
+			else {
+				printf(": %s", hw_addr(&ifr->ifr_addr, ADDR_FMT_LONG));
+			}
+
+			printf("\n");
 		}
-
-		printf("\n");
 	}
 
 	return 0;
 }
 
-int main(int argc, const char **argv)
+static char HELP[] = "%s [-i <interface> [-a | -m]]\n\n"
+	"Options:\n"
+	" -h -- this help\n"
+	" -i <interface> -- set <interface> name to query for\n"
+	" -a -- list IP addresses\n"
+	" -m -- list MAC addresses (you may want to use 'sort -u') here\n"
+	"\n";
+
+static int parse_args(int argc, char * const argv[])
 {
- 	if (query_if_list())
-		return 1;
+	const static char optspec[] = "hi:am";
+
+	while (true) {
+		int opt = getopt(argc, argv, optspec);
+
+		if (opt == -1)
+			break;
+
+		switch (opt) {
+		case 'h':
+			printf(HELP, argv[0]);
+			exit(EXIT_SUCCESS);
+		case 'i':
+			global.ifname_set = true;
+			strncpy(global.ifname, optarg, IFNAMSIZ);
+			continue;
+		case 'a':
+			global.show_ip = true;
+			continue;
+		case 'm':
+			global.show_mac = true;
+			continue;
+		default:
+			return -1;
+		}
+	}
+
+	/* argv[optind] may be parsed here */
+
+	if (optind < argc) {
+		fprintf(stderr, "%s: trailing extra args\n", argv[0]);
+		return -1;
+	}
+
+	if ((global.show_ip || global.show_mac) && !global.ifname_set) {
+		fprintf(stderr, "%s: -a and -m require -i <interface>.\n", argv[0]);
+		return -1;
+	}
+
+	if (global.show_ip && global.show_mac) {
+		/* just turn'em off */
+		global.show_ip = false;
+		global.show_mac = false;
+		/*
+		fprintf(stderr, "%s: -a and -m are mutually exclusive.\n", argv[0]);
+		return -1;
+		*/
+	}
 
 	return 0;
+}
+
+int main(int argc, char * const argv[])
+{
+	if (parse_args(argc, argv))
+		return EXIT_FAILURE;
+
+ 	if (query_if_list())
+		return EXIT_FAILURE;
+
+	return EXIT_SUCCESS;
 }
