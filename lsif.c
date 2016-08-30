@@ -274,7 +274,8 @@ static inline char *ip_addr(const struct sockaddr *sa, enum addr_fmt fmt)
 	char *fmx, *p;
 	int i, rc, pad_size, inf_size;
 
-	p = add_af_name(addr, af, fmt);
+	addr[0] = '\0';
+	p = (fmt == ADDR_FMT_LONG) ? add_af_name(addr, af, fmt) : addr;
 
 	switch (af) {
 	case AF_INET:  pad_size = strlen(addr) + 15; inf_size = sizeof(struct sockaddr_in); break;
