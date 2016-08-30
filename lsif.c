@@ -267,26 +267,38 @@ static inline void rpad4fmt(char *s, int s_size, int pad_size, enum addr_fmt fmt
 		strncat(s, " ", s_size);
 }
 
+static inline int fetch_address(const struct sockaddr *sa, char *s, int size)
+{
+	int inf_size = -1;
+
+	switch (sa->sa_family) {
+	case AF_INET:  inf_size = sizeof(struct sockaddr_in); break;
+	case AF_INET6: inf_size = sizeof(struct sockaddr_in6); break;
+	}
+
+	return getnameinfo(sa, inf_size, s, size, NULL, 0, NI_NUMERICHOST);
+}
+
 static inline char *ip_addr(const struct sockaddr *sa, enum addr_fmt fmt)
 {
 	const int af = sa->sa_family;
 	static char addr[64];
 	char *fmx, *p;
-	int i, rc, pad_size, inf_size;
+	int i, rc, pad_size;
 
 	addr[0] = '\0';
 	p = (fmt == ADDR_FMT_LONG) ? add_af_name(addr, af, fmt) : addr;
 
 	switch (af) {
-	case AF_INET:  pad_size = strlen(addr) + 15; inf_size = sizeof(struct sockaddr_in); break;
-	case AF_INET6: pad_size = strlen(addr) + 40; inf_size = sizeof(struct sockaddr_in6); break;
-	default: pad_size = 0; inf_size = -1; break;
+	case AF_INET:  pad_size = strlen(addr) + 15; break;
+	case AF_INET6: pad_size = strlen(addr) + 40; break;
+	default: pad_size = 0; break;
 	}
 
 	switch (af) {
 	case AF_INET:
 	case AF_INET6:
-		rc = getnameinfo(sa, inf_size, p, NI_MAXHOST, NULL, 0, NI_NUMERICHOST);
+		rc = fetch_address(sa, p, min(sizeof(addr) - strlen(addr), NI_MAXHOST));
 		if (rc) {
 			strcat(addr, "<error:");
 			strncat(addr, gai_strerror(rc), sizeof(addr));
@@ -371,16 +383,14 @@ static inline void add_ip_addr(void *ifx, const char *errmsg, enum addr_fmt fmt)
 	struct sockaddr *sa;
 	struct ifreq *ifr = ifx;
 	struct ifaddrs *ifa = ifx;
-	char *out;
-	int rc = 0;
 
 	switch (global.mode) {
 	case 1: /* already fetched */ sa = &ifr->ifr_addr; break;
-	case 2: rc = query_ip_addr(ifr); sa = &ifr->ifr_addr; break;
+	case 2: sa = query_ip_addr(ifr) ? NULL : &ifr->ifr_addr; break;
 	case 3: /* already fetched */ sa = ifa->ifa_addr; break;
 	}
 
-	fputs(rc ? errmsg : ip_addr(sa, fmt), stdout);
+	fputs(sa ? ip_addr(sa, fmt) : errmsg, stdout);
 }
 
 static inline void add_hw_addr(struct ifreq *ifr, const char *errmsg, enum addr_fmt fmt)
