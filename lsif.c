@@ -37,13 +37,16 @@
 #include <linux/if_link.h>
 #include <linux/types.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <net/if.h>
 #include <net/if_arp.h>
+#include <net/ethernet.h> /* the L2 protocols */
 #include <arpa/inet.h>
+#include <netpacket/packet.h>
 
 /* legacy mode decls */
 extern int getopt(int argc, char * const argv[], const char *optstring);
@@ -64,13 +67,30 @@ static struct {
 	bool verbose;
 } global = {};
 
-int run_ioctl(int opcode, void *arg)
+int run_ioctl(int opcode, void *arg, const struct sockaddr *sa)
 {
-	int rc, sock = socket(AF_INET, SOCK_DGRAM, 0);
+	int af = sa ? sa->sa_family : AF_INET;
+	int rc, sock = socket(af, SOCK_DGRAM, 0);
 
 	if (sock < 0) {
 		if (global.verbose) perror("socket");
 		return sock;
+	}
+
+	if (sa) {
+		int sa_len = sizeof(struct sockaddr);
+
+		switch (af) {
+		case AF_INET: sa_len = sizeof(struct sockaddr_in); break;
+		case AF_INET6: sa_len = sizeof(struct sockaddr_in6); break;
+		case AF_PACKET: sa_len = sizeof(struct sockaddr_ll); break;
+		}
+
+		if (bind(sock, sa, sa_len)) {
+			// if (global.verbose) perror("bind");
+			close(sock);
+			return rc;
+		}
 	}
 
 	rc = ioctl(sock, opcode, arg);
@@ -87,7 +107,7 @@ int run_ioctl(int opcode, void *arg)
 int query_response_size(void)
 {
 	struct ifconf ifc = {};
-	int rc = run_ioctl(SIOCGIFCONF, &ifc);
+	int rc = run_ioctl(SIOCGIFCONF, &ifc, NULL);
 
 	if (rc) {
 		if (global.verbose) perror("query_response_size");
@@ -99,7 +119,7 @@ int query_response_size(void)
 
 int query_if_hwaddr(struct ifreq *req)
 {
-	int rc = run_ioctl(SIOCGIFHWADDR, req);
+	int rc = run_ioctl(SIOCGIFHWADDR, req, NULL);
 
 	if (rc) {
 		if (global.verbose) perror("query_if_hwaddr:ioctl");
@@ -114,7 +134,7 @@ int query_ip_addr(struct ifreq *req)
 	int rc;
 
 	req->ifr_addr.sa_family = AF_INET;
-	rc = run_ioctl(SIOCGIFADDR, req);
+	rc = run_ioctl(SIOCGIFADDR, req, NULL);
 
 	if (rc) {
 		if (global.verbose) perror("query_ip_addr:ioctl");
@@ -126,7 +146,7 @@ int query_ip_addr(struct ifreq *req)
 
 int query_if_flags(struct ifreq *req)
 {
-	int rc = run_ioctl(SIOCGIFHWADDR, req);
+	int rc = run_ioctl(SIOCGIFHWADDR, req, NULL);
 
 	if (rc) {
 		if (global.verbose) perror("query_if_flags:ioctl");
@@ -134,6 +154,23 @@ int query_if_flags(struct ifreq *req)
 	}
 
 	return 0;
+}
+
+double query_if_last_pkt(const struct sockaddr *sa)
+{
+	struct timeval t;
+	double res;
+	int rc = run_ioctl(SIOCGSTAMP, &t, sa);
+
+	if (rc) {
+		if (global.verbose) perror("query_if_last_pkt:ioctl");
+		return -1.0;
+	}
+
+	res = (double) t.tv_sec;
+	res += ((double) t.tv_usec) / 1000000.0;
+
+	return res;
 }
 
 enum addr_fmt {
@@ -261,6 +298,8 @@ static inline char *add_af_name(char *s, int af, enum addr_fmt fmt)
 
 #define min(x,y) (((x) > (y)) ? (y) : (x))
 
+#define left_in(space) (sizeof(space) - strlen(space))
+
 static inline void rpad4fmt(char *s, int s_size, int pad_size, enum addr_fmt fmt)
 {
 	while (fmt == ADDR_FMT_LONG && strlen(s) < min(s_size, pad_size))
@@ -277,6 +316,53 @@ static inline int fetch_address(const struct sockaddr *sa, char *s, int size)
 	}
 
 	return getnameinfo(sa, inf_size, s, size, NULL, 0, NI_NUMERICHOST);
+}
+
+static inline void hex_colon_bytes(char *s, const void *data, int d_sz)
+{
+	int i;
+	const uint8_t *d = data;
+	char *p;
+
+	for (i = 0, p = s + strlen(s); i < d_sz; i++)
+		sprintf(p + i * 3, "%02x%s", d[i], (i < d_sz - 1) ? ":" : "");
+}
+
+static inline void decode_packet(char *s, int size, const struct sockaddr *sa, enum addr_fmt fmt)
+{
+	const struct sockaddr_ll *ll = (struct sockaddr_ll *)sa;
+	uint8_t *data = (uint8_t *) &ll->sll_addr[0];
+	const int af = ll->sll_hatype;
+	char *p;
+
+	switch (af) {
+	case ARPHRD_LOOPBACK:
+		switch (fmt) {
+		case ADDR_FMT_LONG:	p = "LOOPBACK -"; break;
+		case ADDR_FMT_SHORT:	p = "-"; break;
+		}
+		strncpy(s, p, size);
+		break;
+	case ARPHRD_ETHER:
+		switch (fmt) {
+		case ADDR_FMT_LONG:	p = "ETHER %02x:%02x:%02x:%02x:%02x:%02x"; break;
+		case ADDR_FMT_SHORT:	p = "%02x:%02x:%02x:%02x:%02x:%02x"; break;
+		}
+		snprintf(s, size, p, data[0], data[1], data[2], data[3], data[4], data[5]);
+		break;
+	default:
+		switch (fmt) {
+		case ADDR_FMT_LONG:
+			snprintf(s, size, "<%d> <", af);
+			break;
+		case ADDR_FMT_SHORT:
+			snprintf(s, size, "<%d/", af);
+			break;
+		}
+		hex_colon_bytes(s, data, ll->sll_halen);
+		strncat(s, ">", size);
+		break;
+	}
 }
 
 static inline char *ip_addr(const struct sockaddr *sa, enum addr_fmt fmt)
@@ -298,7 +384,7 @@ static inline char *ip_addr(const struct sockaddr *sa, enum addr_fmt fmt)
 	switch (af) {
 	case AF_INET:
 	case AF_INET6:
-		rc = fetch_address(sa, p, min(sizeof(addr) - strlen(addr), NI_MAXHOST));
+		rc = fetch_address(sa, p, min(left_in(addr), NI_MAXHOST));
 		if (rc) {
 			strcat(addr, "<error:");
 			strncat(addr, gai_strerror(rc), sizeof(addr));
@@ -307,30 +393,13 @@ static inline char *ip_addr(const struct sockaddr *sa, enum addr_fmt fmt)
 		}
 		rpad4fmt(addr, sizeof(addr), pad_size, fmt);
 		break;
-		/*
-	case AF_INET:
-		switch (fmt) {
-		case ADDR_FMT_LONG:	fmx = "%-15.15s"; break;
-		case ADDR_FMT_SHORT:	fmx = "%s"; break;
-		}
-		switch (global.mode) {
-		case 1: p = addr; break;
-		case 2:
-		case 3:
-			break;
-		default: assert(false); break;
-		}
-		sprintf(p, fmx, inet_ntoa(*(struct in_addr *)&sa->sa_data[2]));
-		break;
-		*/
 	case AF_PACKET: /* no real IP here, of course */
-		strcat(p, "-");
+		decode_packet(p, left_in(addr), sa, fmt);
 		break;
 	default:
-		sprintf(p, "<%d/", af);
-		for (i = 0, p = addr + strlen(addr); i < sizeof(sa->sa_data); i++)
-			sprintf(p + i * 3, "%02x%s", (uint8_t) sa->sa_data[i],
-				(i < sizeof(sa->sa_data) - 1) ? ":" : ">");
+		snprintf(p, left_in(addr), "<%d/", af);
+		hex_colon_bytes(addr, sa->sa_data, sizeof(sa->sa_data));
+		strncat(addr, ">", left_in(addr));
 		break;
 	}
 	return addr;
@@ -511,7 +580,7 @@ static int __1__query_if_list(void)
 	ifc.ifc_len = size;
 	ifc.ifc_req = req;
 
-	rc = run_ioctl(SIOCGIFCONF, &ifc);
+	rc = run_ioctl(SIOCGIFCONF, &ifc, NULL);
 	if (rc) {
 		if (global.verbose) perror("query_if_list:ioctl");
 		return rc;
